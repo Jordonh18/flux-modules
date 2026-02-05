@@ -7,6 +7,7 @@
 
 import { memo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Card, CardContent } from '@/components/ui/card';
@@ -27,6 +28,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -41,6 +43,7 @@ import {
   Copy,
   Database,
   Download,
+  ExternalLink,
   Loader2,
   MoreHorizontal,
   Play,
@@ -104,6 +107,7 @@ const databasesApi = {
 function DatabasesPageContent() {
   useDocumentTitle('Databases');
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   
   // Modal states
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -319,7 +323,11 @@ function DatabasesPageContent() {
                   databases?.map((db) => {
                     const typeInfo = getDatabaseTypeInfo(db.type);
                     return (
-                      <TableRow key={db.id}>
+                      <TableRow 
+                        key={db.id} 
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={() => navigate(`/databases/${db.id}`)}
+                      >
                         <TableCell className="px-4">
                           <div>
                             <p className="font-medium">{db.name}</p>
@@ -344,7 +352,7 @@ function DatabasesPageContent() {
                             {db.status}
                           </Badge>
                         </TableCell>
-                        <TableCell className="px-4">
+                        <TableCell className="px-4" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center gap-2">
                             <code className="text-xs bg-muted px-2 py-1 rounded">
                               {db.host}:{db.port}/{db.database}
@@ -359,7 +367,7 @@ function DatabasesPageContent() {
                             </Button>
                           </div>
                         </TableCell>
-                        <TableCell className="px-4">
+                        <TableCell className="px-4" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center gap-2">
                             <code className="text-xs bg-muted px-2 py-1 rounded">
                               {db.username}:{showPassword === db.id ? db.password : '••••••••'}
@@ -382,7 +390,7 @@ function DatabasesPageContent() {
                             </Button>
                           </div>
                         </TableCell>
-                        <TableCell className="px-4 text-right">
+                        <TableCell className="px-4 text-right" onClick={(e) => e.stopPropagation()}>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <Button variant="ghost" size="icon">
@@ -390,6 +398,13 @@ function DatabasesPageContent() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={() => navigate(`/databases/${db.id}`)}
+                              >
+                                <ExternalLink className="mr-2 h-4 w-4" />
+                                Open
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
                               {db.status === 'running' ? (
                                 <DropdownMenuItem
                                   onClick={() => stopDatabaseMutation.mutate(db.id)}
@@ -407,6 +422,7 @@ function DatabasesPageContent() {
                                   Start
                                 </DropdownMenuItem>
                               )}
+                              <DropdownMenuSeparator />
                               <DropdownMenuItem
                                 onClick={() => handleDeleteDatabase(db)}
                                 className="text-destructive focus:text-destructive"

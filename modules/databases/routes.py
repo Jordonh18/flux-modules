@@ -196,10 +196,7 @@ async def list_databases(
     """
     List all Flux-managed database containers.
     """
-    # Get containers from Podman
-    containers = await ContainerService.list_flux_containers()
-    
-    # Get stored credentials from database
+    # Get stored credentials from database first
     result = await db.execute(text("""
         SELECT id, container_id, container_name, database_type, host, port, 
                database_name, username, password, status, error_message, created_at
@@ -207,6 +204,12 @@ async def list_databases(
         ORDER BY created_at DESC
     """))
     stored_dbs = result.fetchall()
+    
+    # Get container names we're tracking
+    container_names = [row.container_name for row in stored_dbs]
+    
+    # Get containers from Podman (only the ones we're tracking)
+    containers = await ContainerService.list_flux_containers(container_names)
     
     # Merge container status with stored info
     databases = []
@@ -273,9 +276,11 @@ async def create_database(
     # Generate container name and credentials upfront
     suffix = secrets.token_hex(4)
     if request.name:
-        container_name = f"{ContainerService.CONTAINER_PREFIX}{request.name}-{suffix}"
+        # Use user's chosen name + UUID (no extra prefixes)
+        container_name = f"{request.name}-{suffix}"
     else:
-        container_name = f"{ContainerService.CONTAINER_PREFIX}{db_type.value}-{suffix}"
+        # Fallback to db type + UUID
+        container_name = f"{db_type.value}-{suffix}"
     
     username = ContainerService.generate_username()
     password = ContainerService.generate_password()
@@ -460,28 +465,6 @@ async def get_database_logs(
     current_user = Depends(require_permission("databases:read"))
 ):
     """
-    Get logs from a database container (Portainer-style).
-    """
-    result = await db.execute(text(
-        "SELECT container_name FROM module_databases WHERE id = :id"
-    ), {"id": database_id})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Database not found")
-    
-    logs = await ContainerService.get_container_logs(row.container_name, lines=lines)
-    return {"logs": logs}
-
-
-@router.get("/databases/{database_id}/logs")
-async def get_database_logs(
-    database_id: int,
-    lines: int = 100,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:read"))
-):
-    """
     Get logs from a database container.
     """
     result = await db.execute(text(
@@ -494,4 +477,213 @@ async def get_database_logs(
     
     logs = await ContainerService.get_container_logs(row.container_name, lines)
     return {"logs": logs}
+
+
+@router.get("/databases/{database_id}/stats")
+async def get_database_stats(
+    database_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:read"))
+):
+    """
+    Get container resource stats (CPU, memory, network, disk).
+    """
+    result = await db.execute(text(
+        "SELECT container_name FROM module_databases WHERE id = :id"
+    ), {"id": database_id})
+    row = result.fetchone()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Database not found")
+    
+    stats = await ContainerService.get_container_stats(row.container_name)
+    return stats
+
+
+@router.get("/databases/{database_id}/inspect")
+async def inspect_database(
+    database_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:read"))
+):
+    """
+    Get detailed container information.
+    """
+    result = await db.execute(text(
+        "SELECT container_name, database_type, database_name, username, password FROM module_databases WHERE id = :id"
+    ), {"id": database_id})
+    row = result.fetchone()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Database not found")
+    
+    # Get container inspect info
+    inspect_info = await ContainerService.get_container_inspect(row.container_name)
+    
+    # Get database size
+    db_type = DatabaseType(row.database_type)
+    size_info = await ContainerService.get_database_size(
+        row.container_name, db_type, row.database_name, row.username, row.password
+    )
+    
+    return {
+        "container": inspect_info,
+        "database_size": size_info,
+    }
+
+
+@router.post("/databases/{database_id}/backup")
+async def backup_database(
+    database_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:write"))
+):
+    """
+    Create a backup of the database.
+    Returns the backup file path.
+    """
+    import os
+    from datetime import datetime
+    
+    result = await db.execute(text(
+        "SELECT container_name, database_type, database_name, username, password FROM module_databases WHERE id = :id"
+    ), {"id": database_id})
+    row = result.fetchone()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Database not found")
+    
+    # Create backups directory
+    backup_dir = os.path.expanduser("~/.flux/backups/databases")
+    os.makedirs(backup_dir, exist_ok=True)
+    
+    # Generate backup filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_filename = f"{row.container_name}_{timestamp}.sql"
+    if row.database_type == "mongodb":
+        backup_filename = f"{row.container_name}_{timestamp}.archive"
+    elif row.database_type == "redis":
+        backup_filename = f"{row.container_name}_{timestamp}.rdb"
+    
+    backup_path = os.path.join(backup_dir, backup_filename)
+    
+    db_type = DatabaseType(row.database_type)
+    success, message = await ContainerService.backup_database(
+        row.container_name, db_type, row.database_name, row.username, row.password, backup_path
+    )
+    
+    if success:
+        # Store backup record
+        await db.execute(text("""
+            INSERT INTO module_database_backups (database_id, backup_path, backup_size, created_at)
+            VALUES (:database_id, :backup_path, :backup_size, datetime('now'))
+        """), {
+            "database_id": database_id,
+            "backup_path": backup_path,
+            "backup_size": os.path.getsize(backup_path) if os.path.exists(backup_path) else 0,
+        })
+        await db.commit()
+        
+        return {"success": True, "message": message, "backup_path": backup_path}
+    
+    raise HTTPException(status_code=500, detail=message)
+
+
+@router.get("/databases/{database_id}/backups")
+async def list_database_backups(
+    database_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:read"))
+):
+    """
+    List all backups for a database.
+    """
+    result = await db.execute(text("""
+        SELECT id, backup_path, backup_size, created_at
+        FROM module_database_backups
+        WHERE database_id = :database_id
+        ORDER BY created_at DESC
+    """), {"database_id": database_id})
+    
+    backups = []
+    for row in result.fetchall():
+        backups.append({
+            "id": row.id,
+            "path": row.backup_path,
+            "size": row.backup_size,
+            "created_at": row.created_at,
+        })
+    
+    return {"backups": backups}
+
+
+@router.post("/databases/{database_id}/restore/{backup_id}")
+async def restore_database(
+    database_id: int,
+    backup_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:write"))
+):
+    """
+    Restore a database from a backup.
+    """
+    # Get database info
+    db_result = await db.execute(text(
+        "SELECT container_name, database_type, database_name, username, password FROM module_databases WHERE id = :id"
+    ), {"id": database_id})
+    db_row = db_result.fetchone()
+    
+    if not db_row:
+        raise HTTPException(status_code=404, detail="Database not found")
+    
+    # Get backup info
+    backup_result = await db.execute(text(
+        "SELECT backup_path FROM module_database_backups WHERE id = :id AND database_id = :database_id"
+    ), {"id": backup_id, "database_id": database_id})
+    backup_row = backup_result.fetchone()
+    
+    if not backup_row:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    
+    db_type = DatabaseType(db_row.database_type)
+    success, message = await ContainerService.restore_database(
+        db_row.container_name, db_type, db_row.database_name, 
+        db_row.username, db_row.password, backup_row.backup_path
+    )
+    
+    if success:
+        return {"success": True, "message": message}
+    
+    raise HTTPException(status_code=500, detail=message)
+
+
+@router.delete("/databases/{database_id}/backups/{backup_id}")
+async def delete_backup(
+    database_id: int,
+    backup_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:write"))
+):
+    """
+    Delete a backup file.
+    """
+    import os
+    
+    result = await db.execute(text(
+        "SELECT backup_path FROM module_database_backups WHERE id = :id AND database_id = :database_id"
+    ), {"id": backup_id, "database_id": database_id})
+    row = result.fetchone()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    
+    # Delete file
+    if os.path.exists(row.backup_path):
+        os.remove(row.backup_path)
+    
+    # Delete record
+    await db.execute(text("DELETE FROM module_database_backups WHERE id = :id"), {"id": backup_id})
+    await db.commit()
+    
+    return {"success": True, "message": "Backup deleted"}
 

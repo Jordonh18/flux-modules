@@ -115,8 +115,8 @@ class DatabaseCredentials:
 class ContainerService:
     """Service for managing containers via Podman"""
     
-    # Container name prefix for Flux-managed containers
-    CONTAINER_PREFIX = "flux-db-"
+    # Container name prefix for Flux-managed containers (minimal for filtering)
+    CONTAINER_PREFIX = "flux-"
     
     @staticmethod
     async def check_podman_installed() -> tuple[bool, Optional[str]]:
@@ -254,12 +254,13 @@ class ContainerService:
         return f"{secrets.choice(adjectives)}_{secrets.choice(nouns)}"
     
     @staticmethod
-    async def list_flux_containers() -> list[ContainerInfo]:
-        """List all Flux-managed containers"""
+    async def list_flux_containers(container_names: list[str] = None) -> list[ContainerInfo]:
+        """List containers by name, or all containers if no names provided"""
         try:
+            cmd = ["podman", "ps", "-a", "--format", "json"]
+            
             result = await asyncio.create_subprocess_exec(
-                "podman", "ps", "-a", "--format", "json",
-                "--filter", f"name={ContainerService.CONTAINER_PREFIX}",
+                *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -269,6 +270,14 @@ class ContainerService:
                 return []
             
             containers = json.loads(stdout.decode()) if stdout.decode().strip() else []
+            
+            # Filter by names if provided
+            if container_names:
+                name_set = set(container_names)
+                containers = [
+                    c for c in containers
+                    if (c.get("Names", [""])[0] if isinstance(c.get("Names"), list) else c.get("Names", "")) in name_set
+                ]
             
             return [
                 ContainerInfo(
@@ -471,6 +480,345 @@ class ContainerService:
             return stdout.decode() + stderr.decode()
         except Exception as e:
             return f"Error getting logs: {str(e)}"
+    
+    @staticmethod
+    async def get_container_stats(name_or_id: str) -> dict:
+        """Get container resource usage stats (CPU, memory, network, disk)"""
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "podman", "stats", "--no-stream", "--format", "json", name_or_id,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await result.communicate()
+            
+            if result.returncode != 0:
+                return {"error": stderr.decode()}
+            
+            stats_list = json.loads(stdout.decode()) if stdout.decode().strip() else []
+            if stats_list and len(stats_list) > 0:
+                stats = stats_list[0]
+                return {
+                    "container_id": stats.get("id", "")[:12],
+                    "name": stats.get("name", ""),
+                    "cpu_percent": stats.get("cpu_percent", "0%"),
+                    "mem_usage": stats.get("mem_usage", "0B / 0B"),
+                    "mem_percent": stats.get("mem_percent", "0%"),
+                    "net_io": stats.get("net_io", "0B / 0B"),
+                    "block_io": stats.get("block_io", "0B / 0B"),
+                    "pids": stats.get("pids", 0),
+                }
+            return {"error": "No stats available"}
+        except Exception as e:
+            return {"error": f"Error getting stats: {str(e)}"}
+    
+    @staticmethod
+    async def get_container_inspect(name_or_id: str) -> dict:
+        """Get detailed container information via podman inspect"""
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "podman", "inspect", name_or_id,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await result.communicate()
+            
+            if result.returncode != 0:
+                return {"error": stderr.decode()}
+            
+            data = json.loads(stdout.decode())
+            if data and len(data) > 0:
+                container = data[0]
+                # Extract useful info
+                return {
+                    "id": container.get("Id", "")[:12],
+                    "name": container.get("Name", "").lstrip("/"),
+                    "image": container.get("ImageName", ""),
+                    "created": container.get("Created", ""),
+                    "state": {
+                        "status": container.get("State", {}).get("Status", "unknown"),
+                        "running": container.get("State", {}).get("Running", False),
+                        "started_at": container.get("State", {}).get("StartedAt", ""),
+                        "finished_at": container.get("State", {}).get("FinishedAt", ""),
+                        "exit_code": container.get("State", {}).get("ExitCode", 0),
+                    },
+                    "network": {
+                        "ip_address": container.get("NetworkSettings", {}).get("IPAddress", ""),
+                        "ports": container.get("NetworkSettings", {}).get("Ports", {}),
+                    },
+                    "mounts": [
+                        {"source": m.get("Source"), "destination": m.get("Destination"), "mode": m.get("Mode")}
+                        for m in container.get("Mounts", [])
+                    ],
+                    "env": [e for e in container.get("Config", {}).get("Env", []) if not e.startswith("PATH=")],
+                }
+            return {"error": "Container not found"}
+        except Exception as e:
+            return {"error": f"Error inspecting container: {str(e)}"}
+    
+    @staticmethod
+    async def exec_command(name_or_id: str, command: list[str], timeout: float = 60.0) -> tuple[bool, str]:
+        """
+        Execute a command inside a container.
+        Returns (success, output)
+        """
+        try:
+            cmd = ["podman", "exec", name_or_id] + command
+            result = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            try:
+                stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                result.kill()
+                return False, f"Command timed out after {timeout}s"
+            
+            output = stdout.decode() + stderr.decode()
+            return result.returncode == 0, output
+        except Exception as e:
+            return False, f"Error executing command: {str(e)}"
+    
+    @staticmethod
+    async def backup_database(
+        name_or_id: str,
+        db_type: DatabaseType,
+        database: str,
+        username: str,
+        password: str,
+        backup_path: str
+    ) -> tuple[bool, str]:
+        """
+        Create a database backup using database-specific dump commands.
+        Returns (success, message_or_backup_content)
+        """
+        try:
+            # Build dump command based on database type
+            if db_type == DatabaseType.POSTGRESQL:
+                dump_cmd = ["pg_dump", "-U", username, database]
+                env_prefix = f"PGPASSWORD={password}"
+                cmd = ["podman", "exec", "-e", env_prefix, name_or_id] + dump_cmd
+                
+            elif db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB):
+                dump_cmd = ["mysqldump", "-u", username, f"-p{password}", database]
+                cmd = ["podman", "exec", name_or_id] + dump_cmd
+                
+            elif db_type == DatabaseType.MONGODB:
+                # MongoDB outputs binary, use --archive for single file
+                dump_cmd = ["mongodump", "--archive", "-u", username, "-p", password, "--authenticationDatabase", "admin", "-d", database]
+                cmd = ["podman", "exec", name_or_id] + dump_cmd
+                
+            elif db_type == DatabaseType.REDIS:
+                # Redis uses BGSAVE and we get the dump.rdb
+                # First trigger save
+                save_cmd = ["podman", "exec", name_or_id, "redis-cli", "-a", password, "BGSAVE"]
+                result = await asyncio.create_subprocess_exec(
+                    *save_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                await result.communicate()
+                await asyncio.sleep(2)  # Wait for save to complete
+                
+                # Then copy the dump file out
+                cmd = ["podman", "cp", f"{name_or_id}:/data/dump.rdb", backup_path]
+                result = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await result.communicate()
+                if result.returncode == 0:
+                    return True, f"Redis backup saved to {backup_path}"
+                return False, stderr.decode()
+            else:
+                return False, f"Unsupported database type: {db_type}"
+            
+            # Execute dump command
+            result = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            try:
+                stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=300.0)
+            except asyncio.TimeoutError:
+                result.kill()
+                return False, "Backup timed out after 5 minutes"
+            
+            if result.returncode == 0:
+                # Write to backup file
+                with open(backup_path, "wb") as f:
+                    f.write(stdout)
+                return True, f"Backup saved to {backup_path}"
+            
+            return False, f"Backup failed: {stderr.decode()}"
+            
+        except Exception as e:
+            return False, f"Error creating backup: {str(e)}"
+    
+    @staticmethod
+    async def restore_database(
+        name_or_id: str,
+        db_type: DatabaseType,
+        database: str,
+        username: str,
+        password: str,
+        backup_path: str
+    ) -> tuple[bool, str]:
+        """
+        Restore a database from a backup file.
+        Returns (success, message)
+        """
+        try:
+            # Read backup file
+            try:
+                with open(backup_path, "rb") as f:
+                    backup_data = f.read()
+            except FileNotFoundError:
+                return False, f"Backup file not found: {backup_path}"
+            
+            # Build restore command based on database type
+            if db_type == DatabaseType.POSTGRESQL:
+                # Copy file into container, then restore
+                container_path = "/tmp/restore.sql"
+                
+                # Write to temp file and copy into container
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".sql") as tmp:
+                    tmp.write(backup_data)
+                    tmp_path = tmp.name
+                
+                cp_cmd = ["podman", "cp", tmp_path, f"{name_or_id}:{container_path}"]
+                result = await asyncio.create_subprocess_exec(*cp_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                await result.communicate()
+                
+                # Restore using psql
+                restore_cmd = ["podman", "exec", "-e", f"PGPASSWORD={password}", name_or_id, 
+                              "psql", "-U", username, "-d", database, "-f", container_path]
+                
+            elif db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB):
+                container_path = "/tmp/restore.sql"
+                
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".sql") as tmp:
+                    tmp.write(backup_data)
+                    tmp_path = tmp.name
+                
+                cp_cmd = ["podman", "cp", tmp_path, f"{name_or_id}:{container_path}"]
+                result = await asyncio.create_subprocess_exec(*cp_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                await result.communicate()
+                
+                restore_cmd = ["podman", "exec", name_or_id, 
+                              "sh", "-c", f"mysql -u {username} -p{password} {database} < {container_path}"]
+                
+            elif db_type == DatabaseType.MONGODB:
+                container_path = "/tmp/restore.archive"
+                
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".archive") as tmp:
+                    tmp.write(backup_data)
+                    tmp_path = tmp.name
+                
+                cp_cmd = ["podman", "cp", tmp_path, f"{name_or_id}:{container_path}"]
+                result = await asyncio.create_subprocess_exec(*cp_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                await result.communicate()
+                
+                restore_cmd = ["podman", "exec", name_or_id, 
+                              "mongorestore", "--archive=" + container_path, "-u", username, "-p", password, 
+                              "--authenticationDatabase", "admin"]
+                
+            elif db_type == DatabaseType.REDIS:
+                # Copy dump.rdb into container and restart
+                cp_cmd = ["podman", "cp", backup_path, f"{name_or_id}:/data/dump.rdb"]
+                result = await asyncio.create_subprocess_exec(*cp_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                _, stderr = await result.communicate()
+                
+                if result.returncode != 0:
+                    return False, f"Failed to copy backup: {stderr.decode()}"
+                
+                # Restart container to load the dump
+                await ContainerService.stop_container(name_or_id)
+                await asyncio.sleep(1)
+                await ContainerService.start_container(name_or_id)
+                
+                return True, "Redis backup restored (container restarted)"
+            else:
+                return False, f"Unsupported database type: {db_type}"
+            
+            # Execute restore command
+            result = await asyncio.create_subprocess_exec(
+                *restore_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            try:
+                stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=300.0)
+            except asyncio.TimeoutError:
+                result.kill()
+                return False, "Restore timed out after 5 minutes"
+            
+            if result.returncode == 0:
+                return True, "Database restored successfully"
+            
+            return False, f"Restore failed: {stderr.decode()}"
+            
+        except Exception as e:
+            return False, f"Error restoring database: {str(e)}"
+    
+    @staticmethod
+    async def get_database_size(name_or_id: str, db_type: DatabaseType, database: str, username: str, password: str) -> dict:
+        """Get the size of the database"""
+        try:
+            if db_type == DatabaseType.POSTGRESQL:
+                cmd = ["podman", "exec", "-e", f"PGPASSWORD={password}", name_or_id,
+                       "psql", "-U", username, "-d", database, "-t", "-c", 
+                       f"SELECT pg_size_pretty(pg_database_size('{database}'));"]
+            elif db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB):
+                cmd = ["podman", "exec", name_or_id,
+                       "mysql", "-u", username, f"-p{password}", "-N", "-e",
+                       f"SELECT CONCAT(ROUND(SUM(data_length + index_length) / 1024 / 1024, 2), ' MB') FROM information_schema.tables WHERE table_schema = '{database}';"]
+            elif db_type == DatabaseType.MONGODB:
+                cmd = ["podman", "exec", name_or_id,
+                       "mongosh", "-u", username, "-p", password, "--authenticationDatabase", "admin",
+                       database, "--quiet", "--eval", "JSON.stringify(db.stats())"]
+            elif db_type == DatabaseType.REDIS:
+                cmd = ["podman", "exec", name_or_id, "redis-cli", "-a", password, "INFO", "memory"]
+            else:
+                return {"error": f"Unsupported database type: {db_type}"}
+            
+            result = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await result.communicate()
+            
+            if result.returncode == 0:
+                output = stdout.decode().strip()
+                if db_type == DatabaseType.REDIS:
+                    # Parse Redis INFO memory output
+                    for line in output.split("\n"):
+                        if line.startswith("used_memory_human:"):
+                            return {"size": line.split(":")[1].strip()}
+                    return {"size": "unknown"}
+                elif db_type == DatabaseType.MONGODB:
+                    try:
+                        stats = json.loads(output)
+                        size_bytes = stats.get("dataSize", 0) + stats.get("indexSize", 0)
+                        size_mb = round(size_bytes / 1024 / 1024, 2)
+                        return {"size": f"{size_mb} MB", "raw": stats}
+                    except:
+                        return {"size": output}
+                return {"size": output.strip()}
+            
+            return {"error": stderr.decode()}
+        except Exception as e:
+            return {"error": f"Error getting database size: {str(e)}"}
 
 
 # Module-level instance
