@@ -2,7 +2,7 @@
 Databases Module - API Routes
 
 Database management endpoints.
-The router is automatically mounted at /api/modules/Databases/
+The router is automatically mounted at /api/modules/databases/
 """
 
 from module_sdk import (
@@ -19,7 +19,7 @@ from module_sdk import (
 )
 
 # Create router
-router = ModuleRouter("Databases")
+router = ModuleRouter("databases")
 
 
 # ============================================================================
