@@ -18,12 +18,9 @@ from module_sdk import (
     List,
 )
 from enum import Enum
-import sys
-import os
 
-# Add server to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'server'))
-from services.container_service import (
+# Import from module's own services (self-contained)
+from .services.container_service import (
     ContainerService,
     DatabaseType,
     ContainerStatus,
