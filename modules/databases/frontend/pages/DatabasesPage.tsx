@@ -37,7 +37,6 @@ import {
 } from '@/components/ui/select';
 import {
   AlertCircle,
-  CheckCircle2,
   Copy,
   Database,
   Download,
@@ -234,7 +233,6 @@ function DatabasesPageContent() {
         </div>
         {podmanStatus?.installed && (
           <Button onClick={() => setIsCreateModalOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
             Create Database
           </Button>
         )}
@@ -268,17 +266,6 @@ function DatabasesPageContent() {
         </Card>
       )}
 
-      {podmanStatus?.installed && (
-        <Card className="border-green-500/50 bg-green-500/10">
-          <CardContent className="flex items-center gap-3 p-4">
-            <CheckCircle2 className="h-5 w-5 text-green-500" />
-            <div>
-              <p className="font-medium">Podman Ready</p>
-              <p className="text-sm text-muted-foreground">{podmanStatus.version}</p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Databases Table */}
       {podmanStatus?.installed && (
