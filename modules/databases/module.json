@@ -20,7 +20,7 @@
     {
       "menu": "main",
       "title": "Database",
-      "path": "/database",
+      "path": "/databases",
       "icon": "Database",
       "required_permission": "databases:read"
     }
@@ -28,6 +28,6 @@
   "dependencies": [],
   "frontend": {
     "enabled": true,
-    "entry": "frontend/pages/DatabasePage.tsx"
+    "entry": "frontend/pages/DatabasesPage.tsx"
   }
 }
