@@ -222,9 +222,16 @@ class ContainerService:
             return False, f"Error installing Podman: {str(e)}"
     
     @staticmethod
-    def find_available_port(start_port: int = 10000, end_port: int = 65000) -> int:
-        """Find an available port on the host"""
+    def find_available_port(start_port: int = 10000, end_port: int = 65000, exclude_ports: set = None) -> int:
+        """Find an available port on the host, excluding already-assigned ports"""
+        if exclude_ports is None:
+            exclude_ports = set()
+        
         for port in range(start_port, end_port):
+            # Skip ports already assigned in the database
+            if port in exclude_ports:
+                continue
+                
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 try:
                     s.bind(("127.0.0.1", port))

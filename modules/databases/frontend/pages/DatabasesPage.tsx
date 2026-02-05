@@ -8,6 +8,7 @@
 import { memo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
@@ -212,7 +213,7 @@ function DatabasesPageContent() {
 
   const getStatusBadgeVariant = (status: string) => {
     switch (status.toLowerCase()) {
-      case 'running': return 'success';
+      case 'running': return 'default';
       case 'creating': return 'default';
       case 'error': return 'destructive';
       case 'stopped':
@@ -243,7 +244,11 @@ function DatabasesPageContent() {
           <p className="text-muted-foreground">Manage containerized database instances</p>
         </div>
         {podmanStatus?.installed && (
-          <Button onClick={() => setIsCreateModalOpen(true)}>
+          <Button 
+            onClick={() => setIsCreateModalOpen(true)}
+            disabled={createDatabaseMutation.isPending}
+          >
+            {createDatabaseMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Create Database
           </Button>
         )}
@@ -328,7 +333,13 @@ function DatabasesPageContent() {
                           </div>
                         </TableCell>
                         <TableCell className="px-4">
-                          <Badge variant={getStatusBadgeVariant(db.status)} className="capitalize flex items-center gap-1 w-fit">
+                          <Badge 
+                            variant={getStatusBadgeVariant(db.status)} 
+                            className={cn(
+                              "capitalize flex items-center gap-1 w-fit",
+                              db.status === 'running' && "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20"
+                            )}
+                          >
                             {db.status === 'creating' && <Loader2 className="h-3 w-3 animate-spin" />}
                             {db.status}
                           </Badge>

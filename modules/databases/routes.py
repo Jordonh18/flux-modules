@@ -17,7 +17,10 @@ from module_sdk import (
     Optional,
     List,
 )
+from database import get_db_context
 from enum import Enum
+import secrets
+import asyncio
 
 # Import from module's own services (self-contained)
 from .services.container_service import (
@@ -212,11 +215,17 @@ async def list_databases(
     for row in stored_dbs:
         container = container_map.get(row.container_name)
         
-        # Use database status if creating/error, otherwise use container status
-        if row.status in ('creating', 'error'):
-            status = row.status
+        # Always prefer real container status when container exists
+        if container:
+            status = container.status.value
+        elif row.status == 'error':
+            # Show error status if no container and DB says error
+            status = 'error'
+        elif row.status == 'creating':
+            # Show creating if no container yet
+            status = 'creating'
         else:
-            status = container.status.value if container else "unknown"
+            status = 'unknown'
         
         databases.append({
             "id": row.id,
@@ -257,6 +266,10 @@ async def create_database(
     # Map enum to DatabaseType
     db_type = DatabaseType(request.type.value)
     
+    # Get already-used ports from database (including creating databases)
+    port_result = await db.execute(text("SELECT port FROM module_databases"))
+    used_ports = {row.port for row in port_result.fetchall()}
+    
     # Generate container name and credentials upfront
     suffix = secrets.token_hex(4)
     if request.name:
@@ -266,7 +279,7 @@ async def create_database(
     
     username = ContainerService.generate_username()
     password = ContainerService.generate_password()
-    host_port = ContainerService.find_available_port()
+    host_port = ContainerService.find_available_port(exclude_ports=used_ports)
     
     try:
         # Insert database record immediately with 'creating' status
@@ -288,45 +301,57 @@ async def create_database(
         db_id = result.scalar()
         await db.commit()
         
-        # Now create the container (this can take time)
-        try:
-            credentials = await ContainerService.create_database(
-                db_type=db_type,
-                name=request.name,
-                database_name=request.database_name,
-                container_name=container_name,
-                username=username,
-                password=password,
-                host_port=host_port
-            )
-            
-            # Update record with container ID and success status
-            await db.execute(text("""
-                UPDATE module_databases 
-                SET container_id = :container_id, status = 'running', updated_at = datetime('now')
-                WHERE id = :id
-            """), {
-                "container_id": credentials.container_id,
-                "id": db_id
-            })
-            await db.commit()
-            
-        except Exception as container_error:
-            # Update record with error status
-            await db.execute(text("""
-                UPDATE module_databases 
-                SET status = 'error', error_message = :error, updated_at = datetime('now')
-                WHERE id = :id
-            """), {
-                "error": str(container_error),
-                "id": db_id
-            })
-            await db.commit()
-            # Don't raise - record is created, container just failed
+        # Create container in background task
+        async def create_container_background():
+            """Background task to create container and update status"""
+            try:
+                credentials = await ContainerService.create_database(
+                    db_type=db_type,
+                    name=request.name,
+                    database_name=request.database_name,
+                    container_name=container_name,
+                    username=username,
+                    password=password,
+                    host_port=host_port
+                )
+                
+                # Update record with container ID and success status
+                try:
+                    async with get_db_context() as background_db:
+                        await background_db.execute(text("""
+                            UPDATE module_databases 
+                            SET container_id = :container_id, status = 'running', updated_at = datetime('now')
+                            WHERE id = :id
+                        """), {
+                            "container_id": credentials.container_id,
+                            "id": db_id
+                        })
+                except Exception as db_error:
+                    print(f"Failed to update database status: {db_error}")
+                    
+            except Exception as container_error:
+                print(f"Container creation failed: {container_error}")
+                # Update record with error status
+                try:
+                    async with get_db_context() as background_db:
+                        await background_db.execute(text("""
+                            UPDATE module_databases 
+                            SET status = 'error', error_message = :error, updated_at = datetime('now')
+                            WHERE id = :id
+                        """), {
+                            "error": str(container_error),
+                            "id": db_id
+                        })
+                except Exception as db_error:
+                    print(f"Failed to update error status: {db_error}")
         
+        # Start background task (don't await)
+        asyncio.create_task(create_container_background())
+        
+        # Return immediately
         return {
             "success": True,
-            "message": f"{db_type.value} database created successfully",
+            "message": f"{db_type.value} database creation started",
             "database": {
                 "id": db_id,
                 "name": container_name,
@@ -336,6 +361,7 @@ async def create_database(
                 "database": request.database_name,
                 "username": username,
                 "password": password,
+                "status": "creating",
             }
         }
         
@@ -424,6 +450,28 @@ async def delete_database(
     await db.commit()
     
     return {"success": True, "message": "Database deleted"}
+
+
+@router.get("/databases/{database_id}/logs")
+async def get_database_logs(
+    database_id: int,
+    lines: int = 100,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:read"))
+):
+    """
+    Get logs from a database container (Portainer-style).
+    """
+    result = await db.execute(text(
+        "SELECT container_name FROM module_databases WHERE id = :id"
+    ), {"id": database_id})
+    row = result.fetchone()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Database not found")
+    
+    logs = await ContainerService.get_container_logs(row.container_name, lines=lines)
+    return {"logs": logs}
 
 
 @router.get("/databases/{database_id}/logs")
