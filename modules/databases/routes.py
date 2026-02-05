@@ -280,7 +280,17 @@ async def create_database(
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Rollback database transaction on any error
+        await db.rollback()
+        
+        # Extract clean error message
+        error_msg = str(e)
+        if "already in use" in error_msg.lower():
+            error_msg = "A database with this name already exists. Please choose a different name."
+        elif "timeout" in error_msg.lower():
+            error_msg = "Database creation timed out. The image may still be downloading. Please try again in a moment."
+        
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @router.post("/databases/{database_id}/start")

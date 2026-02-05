@@ -287,11 +287,13 @@ class ContainerService:
         """
         Create a new database container with auto-generated credentials.
         """
-        # Generate container name
+        # Generate container name with unique suffix to prevent conflicts
+        suffix = secrets.token_hex(4)
         if name:
-            container_name = f"{ContainerService.CONTAINER_PREFIX}{name}"
+            # Use custom name but still add unique suffix
+            container_name = f"{ContainerService.CONTAINER_PREFIX}{name}-{suffix}"
         else:
-            suffix = secrets.token_hex(4)
+            # Generate full name
             container_name = f"{ContainerService.CONTAINER_PREFIX}{db_type.value}-{suffix}"
         
         # Generate credentials
