@@ -312,11 +312,11 @@ class ContainerService:
             # Generate container name with unique suffix to prevent conflicts
             suffix = secrets.token_hex(4)
             if name:
-                # Use custom name but still add unique suffix
-                container_name = f"{ContainerService.CONTAINER_PREFIX}{name}-{suffix}"
+                # Use custom name + unique suffix (no prefix)
+                container_name = f"{name}-{suffix}"
             else:
-                # Generate full name
-                container_name = f"{ContainerService.CONTAINER_PREFIX}{db_type.value}-{suffix}"
+                # Generate full name using db type + suffix (no prefix)
+                container_name = f"{db_type.value}-{suffix}"
         
         # Generate credentials if not provided
         if not username:

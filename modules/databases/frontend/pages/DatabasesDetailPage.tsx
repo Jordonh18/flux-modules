@@ -289,7 +289,7 @@ function DatabaseDetailPageContent() {
       <div className="flex flex-col items-center justify-center h-64 gap-4">
         <AlertCircle className="h-12 w-12 text-muted-foreground" />
         <p className="text-muted-foreground">Database not found</p>
-        <Button variant="outline" onClick={() => navigate('/modules/databases')}>
+        <Button variant="outline" onClick={() => navigate('/databases')}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back to Databases
         </Button>
@@ -302,7 +302,7 @@ function DatabaseDetailPageContent() {
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => navigate('/modules/databases')}>
+          <Button variant="ghost" size="icon" onClick={() => navigate('/databases')}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div className="flex items-center gap-3">
