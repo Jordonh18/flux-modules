@@ -157,8 +157,7 @@ async def get_podman_status():
 
 
 @router.post("/podman/install", response_model=PodmanStatus)
-@require_permission("databases:write")
-async def install_podman():
+async def install_podman(current_user = Depends(require_permission("databases:write"))):
     """
     Attempt to install Podman on the system.
     Requires databases:write permission.
@@ -187,8 +186,10 @@ async def install_podman():
 
 
 @router.get("/databases", response_model=List[dict])
-@require_permission("databases:read")
-async def list_databases(db: AsyncSession = Depends(get_db)):
+async def list_databases(
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:read"))
+):
     """
     List all Flux-managed database containers.
     """
@@ -228,10 +229,10 @@ async def list_databases(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/databases", response_model=dict)
-@require_permission("databases:write")
 async def create_database(
     request: CreateDatabaseRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:write"))
 ):
     """
     Create a new database container.
@@ -283,8 +284,11 @@ async def create_database(
 
 
 @router.post("/databases/{database_id}/start")
-@require_permission("databases:write")
-async def start_database(database_id: int, db: AsyncSession = Depends(get_db)):
+async def start_database(
+    database_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:write"))
+):
     """
     Start a stopped database container.
     """
@@ -303,8 +307,11 @@ async def start_database(database_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/databases/{database_id}/stop")
-@require_permission("databases:write")
-async def stop_database(database_id: int, db: AsyncSession = Depends(get_db)):
+async def stop_database(
+    database_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:write"))
+):
     """
     Stop a running database container.
     """
@@ -323,8 +330,11 @@ async def stop_database(database_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/databases/{database_id}")
-@require_permission("databases:write")
-async def delete_database(database_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_database(
+    database_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:write"))
+):
     """
     Delete a database container and its stored credentials.
     """
@@ -347,8 +357,12 @@ async def delete_database(database_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/databases/{database_id}/logs")
-@require_permission("databases:read")
-async def get_database_logs(database_id: int, lines: int = 100, db: AsyncSession = Depends(get_db)):
+async def get_database_logs(
+    database_id: int,
+    lines: int = 100,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:read"))
+):
     """
     Get logs from a database container.
     """
