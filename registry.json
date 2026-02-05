@@ -6,7 +6,7 @@
   "website": "https://github.com/Jordonh18/flux-modules",
   "modules": [
     {
-      "name": "Databases",
+      "name": "databases",
       "path": "modules/Databases",
       "display_name": "Databases",
       "version": "1.0.0",
