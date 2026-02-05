@@ -10,16 +10,23 @@
   "permissions": [
     {
       "name": "databases:read",
-      "display_name": "View Database",
-      "description": "Access the database management page",
+      "display_name": "View Databases",
+      "description": "View database containers and their status",
       "resource": "databases",
       "action": "read"
+    },
+    {
+      "name": "databases:write",
+      "display_name": "Manage Databases",
+      "description": "Create, start, stop, and delete database containers",
+      "resource": "databases",
+      "action": "write"
     }
   ],
   "navigation": [
     {
       "menu": "main",
-      "title": "Database",
+      "title": "Databases",
       "path": "/databases",
       "icon": "Database",
       "required_permission": "databases:read"
