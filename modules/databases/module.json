@@ -6,7 +6,10 @@
   "author": "Flux Team",
   "license": "MIT",
   "min_app_version": "1.0.0",
-  "hooks": {},
+  "hooks": {
+    "after_module_enable": "hooks:on_enable",
+    "after_module_disable": "hooks:on_disable"
+  },
   "permissions": [
     {
       "name": "databases:read",

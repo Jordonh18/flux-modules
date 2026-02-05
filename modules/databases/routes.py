@@ -92,6 +92,51 @@ async def get_status():
     }
 
 
+@router.get("/requirements")
+async def get_requirements():
+    """
+    Check system requirements for the databases module.
+    Returns status and any setup instructions needed.
+    """
+    issues = []
+    instructions = []
+    
+    # Check Podman
+    podman_installed, version = await ContainerService.check_podman_installed()
+    if not podman_installed:
+        issues.append("Podman is not installed")
+        instructions.append({
+            "title": "Install Podman",
+            "description": "Podman is required to run database containers",
+            "action": "install_podman",
+            "manual_command": "sudo apt install -y podman  # Debian/Ubuntu\nsudo dnf install -y podman  # Fedora/RHEL"
+        })
+    
+    # Check if user can access podman (rootless)
+    if podman_installed:
+        try:
+            info = await ContainerService.get_podman_info()
+            if not info:
+                issues.append("Cannot access Podman - check user permissions")
+                instructions.append({
+                    "title": "Configure Podman Access",
+                    "description": "The flux user needs permission to run Podman",
+                    "manual_command": "sudo usermod -aG podman flux  # Add flux user to podman group\nsudo loginctl enable-linger flux  # Enable lingering for systemd services"
+                })
+        except Exception:
+            pass
+    
+    return {
+        "ready": len(issues) == 0,
+        "podman": {
+            "installed": podman_installed,
+            "version": version,
+        },
+        "issues": issues,
+        "instructions": instructions,
+    }
+
+
 @router.get("/podman/status", response_model=PodmanStatus)
 async def get_podman_status():
     """
