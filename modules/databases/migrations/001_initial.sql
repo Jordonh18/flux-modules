@@ -7,7 +7,7 @@
 -- Table for storing database container information
 CREATE TABLE IF NOT EXISTS module_databases (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    container_id TEXT NOT NULL,
+    container_id TEXT,
     container_name TEXT NOT NULL UNIQUE,
     database_type TEXT NOT NULL,
     host TEXT NOT NULL DEFAULT 'localhost',
@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS module_databases (
     database_name TEXT NOT NULL,
     username TEXT NOT NULL,
     password TEXT NOT NULL,
+    status TEXT DEFAULT 'creating',
+    error_message TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

@@ -144,18 +144,21 @@ function DatabasesPageContent() {
   const createDatabaseMutation = useMutation({
     mutationFn: databasesApi.createDatabase,
     onMutate: () => {
+      // Close modal immediately and reset form
+      setIsCreateModalOpen(false);
+      setCreateForm({ type: 'postgresql', name: '', database_name: 'app' });
+      
       toast.info('Creating database... This may take a few minutes if the image needs to be downloaded.', {
         duration: 10000,
       });
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['databases', 'list'] });
-      setIsCreateModalOpen(false);
-      setCreateForm({ type: 'postgresql', name: '', database_name: 'app' });
       toast.success(data.message || 'Database created successfully');
     },
     onError: (err: any) => {
       toast.error(err.response?.data?.detail || err.message || 'Failed to create database');
+      queryClient.invalidateQueries({ queryKey: ['databases', 'list'] });
     },
   });
 
@@ -210,6 +213,8 @@ function DatabasesPageContent() {
   const getStatusBadgeVariant = (status: string) => {
     switch (status.toLowerCase()) {
       case 'running': return 'success';
+      case 'creating': return 'default';
+      case 'error': return 'destructive';
       case 'stopped':
       case 'exited': return 'secondary';
       default: return 'outline';
@@ -323,7 +328,8 @@ function DatabasesPageContent() {
                           </div>
                         </TableCell>
                         <TableCell className="px-4">
-                          <Badge variant={getStatusBadgeVariant(db.status)} className="capitalize">
+                          <Badge variant={getStatusBadgeVariant(db.status)} className="capitalize flex items-center gap-1 w-fit">
+                            {db.status === 'creating' && <Loader2 className="h-3 w-3 animate-spin" />}
                             {db.status}
                           </Badge>
                         </TableCell>

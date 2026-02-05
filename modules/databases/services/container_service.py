@@ -282,29 +282,38 @@ class ContainerService:
     async def create_database(
         db_type: DatabaseType,
         name: Optional[str] = None,
-        database_name: str = "app"
+        database_name: str = "app",
+        container_name: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        host_port: Optional[int] = None
     ) -> DatabaseCredentials:
         """
-        Create a new database container with auto-generated credentials.
+        Create a new database container with auto-generated or provided credentials.
         """
-        # Generate container name with unique suffix to prevent conflicts
-        suffix = secrets.token_hex(4)
-        if name:
-            # Use custom name but still add unique suffix
-            container_name = f"{ContainerService.CONTAINER_PREFIX}{name}-{suffix}"
-        else:
-            # Generate full name
-            container_name = f"{ContainerService.CONTAINER_PREFIX}{db_type.value}-{suffix}"
+        # Use provided values or generate new ones
+        if not container_name:
+            # Generate container name with unique suffix to prevent conflicts
+            suffix = secrets.token_hex(4)
+            if name:
+                # Use custom name but still add unique suffix
+                container_name = f"{ContainerService.CONTAINER_PREFIX}{name}-{suffix}"
+            else:
+                # Generate full name
+                container_name = f"{ContainerService.CONTAINER_PREFIX}{db_type.value}-{suffix}"
         
-        # Generate credentials
-        username = ContainerService.generate_username()
-        password = ContainerService.generate_password()
+        # Generate credentials if not provided
+        if not username:
+            username = ContainerService.generate_username()
+        if not password:
+            password = ContainerService.generate_password()
         
-        # Find available port
+        # Find available port if not provided
+        if not host_port:
+            host_port = ContainerService.find_available_port()
+        
+        # Get default internal port and image
         default_port = DATABASE_PORTS[db_type]
-        host_port = ContainerService.find_available_port()
-        
-        # Get image
         image = DATABASE_IMAGES[db_type]
         
         # Build container command based on database type

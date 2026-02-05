@@ -199,7 +199,7 @@ async def list_databases(
     # Get stored credentials from database
     result = await db.execute(text("""
         SELECT id, container_id, container_name, database_type, host, port, 
-               database_name, username, password, created_at
+               database_name, username, password, status, error_message, created_at
         FROM module_databases
         ORDER BY created_at DESC
     """))
@@ -211,18 +211,26 @@ async def list_databases(
     
     for row in stored_dbs:
         container = container_map.get(row.container_name)
+        
+        # Use database status if creating/error, otherwise use container status
+        if row.status in ('creating', 'error'):
+            status = row.status
+        else:
+            status = container.status.value if container else "unknown"
+        
         databases.append({
             "id": row.id,
             "container_id": row.container_id,
             "name": row.container_name,
             "type": row.database_type,
-            "status": container.status.value if container else "unknown",
+            "status": status,
             "host": row.host,
             "port": row.port,
             "database": row.database_name,
             "username": row.username,
             "password": row.password,
             "created_at": row.created_at,
+            "error_message": row.error_message if row.status == 'error' else None,
         })
     
     return databases
@@ -236,6 +244,7 @@ async def create_database(
 ):
     """
     Create a new database container.
+    Creates the database record immediately and updates status as container is created.
     """
     # Check Podman is available
     installed, _ = await ContainerService.check_podman_installed()
@@ -248,35 +257,86 @@ async def create_database(
     # Map enum to DatabaseType
     db_type = DatabaseType(request.type.value)
     
+    # Generate container name and credentials upfront
+    suffix = secrets.token_hex(4)
+    if request.name:
+        container_name = f"{ContainerService.CONTAINER_PREFIX}{request.name}-{suffix}"
+    else:
+        container_name = f"{ContainerService.CONTAINER_PREFIX}{db_type.value}-{suffix}"
+    
+    username = ContainerService.generate_username()
+    password = ContainerService.generate_password()
+    host_port = ContainerService.find_available_port()
+    
     try:
-        # Create the database container
-        credentials = await ContainerService.create_database(
-            db_type=db_type,
-            name=request.name,
-            database_name=request.database_name
-        )
-        
-        # Store credentials in database
-        await db.execute(text("""
+        # Insert database record immediately with 'creating' status
+        result = await db.execute(text("""
             INSERT INTO module_databases 
-            (container_id, container_name, database_type, host, port, database_name, username, password)
-            VALUES (:container_id, :container_name, :database_type, :host, :port, :database_name, :username, :password)
+            (container_id, container_name, database_type, host, port, database_name, username, password, status)
+            VALUES (:container_id, :container_name, :database_type, :host, :port, :database_name, :username, :password, 'creating')
+            RETURNING id
         """), {
-            "container_id": credentials.container_id,
-            "container_name": credentials.container_name,
-            "database_type": credentials.database_type.value,
-            "host": credentials.host,
-            "port": credentials.port,
-            "database_name": credentials.database,
-            "username": credentials.username,
-            "password": credentials.password,
+            "container_id": None,  # Will be updated when container is created
+            "container_name": container_name,
+            "database_type": db_type.value,
+            "host": "localhost",
+            "port": host_port,
+            "database_name": request.database_name,
+            "username": username,
+            "password": password,
         })
+        db_id = result.scalar()
         await db.commit()
+        
+        # Now create the container (this can take time)
+        try:
+            credentials = await ContainerService.create_database(
+                db_type=db_type,
+                name=request.name,
+                database_name=request.database_name,
+                container_name=container_name,
+                username=username,
+                password=password,
+                host_port=host_port
+            )
+            
+            # Update record with container ID and success status
+            await db.execute(text("""
+                UPDATE module_databases 
+                SET container_id = :container_id, status = 'running', updated_at = datetime('now')
+                WHERE id = :id
+            """), {
+                "container_id": credentials.container_id,
+                "id": db_id
+            })
+            await db.commit()
+            
+        except Exception as container_error:
+            # Update record with error status
+            await db.execute(text("""
+                UPDATE module_databases 
+                SET status = 'error', error_message = :error, updated_at = datetime('now')
+                WHERE id = :id
+            """), {
+                "error": str(container_error),
+                "id": db_id
+            })
+            await db.commit()
+            # Don't raise - record is created, container just failed
         
         return {
             "success": True,
             "message": f"{db_type.value} database created successfully",
-            "database": credentials.to_dict()
+            "database": {
+                "id": db_id,
+                "name": container_name,
+                "type": db_type.value,
+                "host": "localhost",
+                "port": host_port,
+                "database": request.database_name,
+                "username": username,
+                "password": password,
+            }
         }
         
     except Exception as e:
@@ -285,8 +345,8 @@ async def create_database(
         
         # Extract clean error message
         error_msg = str(e)
-        if "already in use" in error_msg.lower():
-            error_msg = "A database with this name already exists. Please choose a different name."
+        if "already in use" in error_msg.lower() or "unique" in error_msg.lower():
+            error_msg = "A database with this name already exists. Please try again."
         elif "timeout" in error_msg.lower():
             error_msg = "Database creation timed out. The image may still be downloading. Please try again in a moment."
         
