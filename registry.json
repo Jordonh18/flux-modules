@@ -7,7 +7,7 @@
   "modules": [
     {
       "name": "databases",
-      "path": "modules/Databases",
+      "path": "modules/databases",
       "display_name": "Databases",
       "version": "1.0.0",
       "description": "Database management and exploration tools for Flux",
