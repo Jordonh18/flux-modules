@@ -8,7 +8,7 @@
  * - Settings: Container configuration
  */
 
-import { memo, useState } from 'react';
+import { memo, useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
@@ -30,13 +30,16 @@ import {
   Play,
   RefreshCw,
   ScrollText,
-  BarChart3,
+  Table,
   Square,
   Trash2,
   Eye,
   EyeOff,
   Upload,
   Clock,
+  Search,
+  Columns,
+  List,
   Cpu,
   MemoryStick,
   Network,
@@ -119,12 +122,12 @@ interface Backup {
 }
 
 // Database type options
-const DATABASE_TYPES: Record<string, { label: string; icon: string }> = {
-  postgresql: { label: 'PostgreSQL', icon: '🐘' },
-  mysql: { label: 'MySQL', icon: '🐬' },
-  mariadb: { label: 'MariaDB', icon: '🦭' },
-  mongodb: { label: 'MongoDB', icon: '🍃' },
-  redis: { label: 'Redis', icon: '🔴' },
+const DATABASE_TYPES: Record<string, { label: string; icon: string; description: string }> = {
+  postgresql: { label: 'PostgreSQL', icon: '🐘', description: 'Advanced open-source relational database' },
+  mysql: { label: 'MySQL', icon: '🐬', description: 'World\'s most popular open source database' },
+  mariadb: { label: 'MariaDB', icon: '🦭', description: 'Enhanced MySQL-compatible database' },
+  mongodb: { label: 'MongoDB', icon: '🍃', description: 'Document-oriented NoSQL database' },
+  redis: { label: 'Redis', icon: '🔴', description: 'In-memory data structure store' },
 };
 
 // API functions
@@ -151,6 +154,12 @@ const detailApi = {
     api.post(`/modules/databases/databases/${id}/stop`).then(r => r.data),
   deleteDatabase: (id: number) => 
     api.delete(`/modules/databases/databases/${id}`).then(r => r.data),
+  getTables: (id: number) => 
+    api.get<{ tables: string[] }>(`/modules/databases/databases/${id}/tables`).then(r => r.data),
+  getTableSchema: (id: number, tableName: string) => 
+    api.get<{ schema: Array<{ name: string; type: string; nullable: string }> }>(`/modules/databases/databases/${id}/tables/${tableName}/schema`).then(r => r.data),
+  getTableData: (id: number, tableName: string, limit = 10) => 
+    api.get<{ data: { rows: string[][]; columns: string[] } }>(`/modules/databases/databases/${id}/tables/${tableName}/data?limit=${limit}`).then(r => r.data),
 };
 
 function formatBytes(bytes: number): string {
@@ -175,6 +184,8 @@ function DatabaseDetailPageContent() {
   const [activeTab, setActiveTab] = useState('overview');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [restoreDialogBackup, setRestoreDialogBackup] = useState<Backup | null>(null);
+  const [selectedTable, setSelectedTable] = useState<string>('');
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
   // Queries
   const { data: database, isLoading: dbLoading } = useQuery({
@@ -204,13 +215,39 @@ function DatabaseDetailPageContent() {
     queryKey: ['databases', 'logs', databaseId],
     queryFn: () => detailApi.getLogs(databaseId, 500),
     enabled: databaseId > 0 && activeTab === 'logs',
-    refetchInterval: activeTab === 'logs' ? 5000 : false,
+    refetchInterval: activeTab === 'logs' ? 2000 : false,
   });
+
+  // Auto-scroll logs to bottom when updated
+  useEffect(() => {
+    if (activeTab === 'logs' && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logsData, activeTab]);
 
   const { data: backupsData, refetch: refetchBackups } = useQuery({
     queryKey: ['databases', 'backups', databaseId],
     queryFn: () => detailApi.getBackups(databaseId),
     enabled: databaseId > 0 && activeTab === 'backups',
+  });
+
+  // Explorer queries
+  const { data: tablesData, isLoading: tablesLoading } = useQuery({
+    queryKey: ['databases', 'tables', databaseId],
+    queryFn: () => detailApi.getTables(databaseId),
+    enabled: databaseId > 0 && activeTab === 'explorer' && database?.status === 'running',
+  });
+
+  const { data: schemaData, isLoading: schemaLoading } = useQuery({
+    queryKey: ['databases', 'schema', databaseId, selectedTable],
+    queryFn: () => detailApi.getTableSchema(databaseId, selectedTable),
+    enabled: databaseId > 0 && !!selectedTable && activeTab === 'explorer' && database?.status === 'running',
+  });
+
+  const { data: tableData } = useQuery({
+    queryKey: ['databases', 'tableData', databaseId, selectedTable],
+    queryFn: () => detailApi.getTableData(databaseId, selectedTable, 10),
+    enabled: databaseId > 0 && !!selectedTable && activeTab === 'explorer' && database?.status === 'running',
   });
 
   // Mutations
@@ -302,14 +339,11 @@ function DatabaseDetailPageContent() {
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => navigate('/databases')}>
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
           <div className="flex items-center gap-3">
             <span className="text-3xl">{typeInfo?.icon}</span>
             <div>
               <h1 className="text-2xl font-bold">{database.name}</h1>
-              <p className="text-muted-foreground text-sm font-mono">{database.container_id || 'Creating...'}</p>
+              <p className="text-muted-foreground text-sm">{typeInfo?.description}</p>
             </div>
           </div>
         </div>
@@ -370,9 +404,9 @@ function DatabaseDetailPageContent() {
             <HardDrive className="h-4 w-4" />
             Backups
           </TabsTrigger>
-          <TabsTrigger value="stats" className="flex items-center gap-2">
-            <BarChart3 className="h-4 w-4" />
-            Stats
+          <TabsTrigger value="explorer" className="flex items-center gap-2">
+            <Table className="h-4 w-4" />
+            Explorer
           </TabsTrigger>
         </TabsList>
 
@@ -419,12 +453,13 @@ function DatabaseDetailPageContent() {
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Password</span>
                     <div className="flex items-center gap-2">
-                      <code className="text-sm bg-muted px-2 py-1 rounded">
+                      <code 
+                        className="text-sm bg-muted px-2 py-1 rounded cursor-default"
+                        onMouseEnter={() => setShowPassword(true)}
+                        onMouseLeave={() => setShowPassword(false)}
+                      >
                         {showPassword ? database.password : '••••••••••••'}
                       </code>
-                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setShowPassword(!showPassword)}>
-                        {showPassword ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                      </Button>
                       <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => copyToClipboard(database.password, 'Password')}>
                         <Copy className="h-3 w-3" />
                       </Button>
@@ -556,20 +591,23 @@ function DatabaseDetailPageContent() {
         <TabsContent value="logs" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center justify-between">
+              <CardTitle className="text-lg flex items-center justify-between">
                 Container Logs
                 <Button variant="outline" size="sm" onClick={() => refetchLogs()} disabled={logsLoading}>
                   {logsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                   <span className="ml-2">Refresh</span>
                 </Button>
               </CardTitle>
-              <CardDescription>Last 500 lines, auto-refreshes every 5 seconds</CardDescription>
+              <CardDescription>Last 500 lines, auto-refreshes every 2 seconds</CardDescription>
             </CardHeader>
             <CardContent>
-              <ScrollArea className="h-[500px] w-full rounded border bg-black p-4">
-                <pre className="text-xs text-green-400 font-mono whitespace-pre-wrap">
-                  {logsData?.logs || 'No logs available'}
-                </pre>
+              <ScrollArea className="h-[500px] w-full">
+                <div className="bg-black p-4 rounded border">
+                  <pre className="text-xs text-green-400 font-mono whitespace-pre-wrap break-all">
+                    {logsData?.logs || 'No logs available'}
+                    <div ref={logsEndRef} />
+                  </pre>
+                </div>
               </ScrollArea>
             </CardContent>
           </Card>
@@ -579,7 +617,7 @@ function DatabaseDetailPageContent() {
         <TabsContent value="backups" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center justify-between">
+              <CardTitle className="text-lg flex items-center justify-between">
                 Backups
                 <Button 
                   onClick={() => backupMutation.mutate()} 
@@ -650,101 +688,177 @@ function DatabaseDetailPageContent() {
           </Card>
         </TabsContent>
 
-        {/* Stats Tab */}
-        <TabsContent value="stats" className="space-y-4">
+        {/* Explorer Tab */}
+        <TabsContent value="explorer" className="space-y-4">
           {!isRunning ? (
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                <BarChart3 className="h-12 w-12 mb-4 opacity-50" />
+                <Table className="h-12 w-12 mb-4 opacity-50" />
                 <p>Database is not running</p>
-                <p className="text-sm">Start the database to view stats</p>
+                <p className="text-sm">Start the database to explore tables</p>
               </CardContent>
             </Card>
           ) : (
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <Cpu className="h-4 w-4" />
-                    CPU Usage
+            <div className="grid gap-4 md:grid-cols-3">
+              {/* Tables List */}
+              <Card className="md:col-span-1">
+                <CardHeader>
+                  <CardTitle className="text-lg">
+                    Tables
                   </CardTitle>
+                  <CardDescription>Select a table to explore</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <p className="text-2xl font-bold">{stats?.cpu_percent || '—'}</p>
+                <CardContent className="p-0">
+                  <ScrollArea className="max-h-[60vh]">
+                    <div className="p-4 space-y-2">
+                      {database.type === 'redis' ? (
+                        <div className="text-sm text-muted-foreground text-center py-8">
+                          Redis uses key-value pairs.
+                          <br />
+                          Use a Redis client to explore data.
+                        </div>
+                      ) : tablesLoading ? (
+                        <div className="text-sm text-muted-foreground text-center py-8">
+                          <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
+                          Loading tables...
+                        </div>
+                      ) : !tablesData?.tables || tablesData.tables.length === 0 ? (
+                        <div className="text-sm text-muted-foreground text-center py-8">
+                          No tables found
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          {tablesData.tables.map((tableName) => (
+                            <Button
+                              key={tableName}
+                              variant={selectedTable === tableName ? 'secondary' : 'ghost'}
+                              className="w-full justify-start"
+                              onClick={() => setSelectedTable(tableName)}
+                            >
+                              <Table className="h-4 w-4 mr-2" />
+                              {tableName}
+                            </Button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </ScrollArea>
                 </CardContent>
               </Card>
-              
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <MemoryStick className="h-4 w-4" />
-                    Memory
+
+              {/* Table Details & Data */}
+              <Card className="md:col-span-2">
+                <CardHeader>
+                  <CardTitle className="text-lg">
+                    {selectedTable ? (
+                      <>
+                        Table: {selectedTable}
+                      </>
+                    ) : (
+                      <>
+                        Explorer
+                      </>
+                    )}
                   </CardTitle>
+                  <CardDescription>
+                    {selectedTable ? `Viewing structure and data for ${selectedTable}` : 'Select a table from the list'}
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-2xl font-bold">{stats?.mem_percent || '—'}</p>
-                  <p className="text-xs text-muted-foreground">{stats?.mem_usage || ''}</p>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <Network className="h-4 w-4" />
-                    Network I/O
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-lg font-bold">{stats?.net_io || '—'}</p>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <HardDrive className="h-4 w-4" />
-                    Block I/O
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-lg font-bold">{stats?.block_io || '—'}</p>
+                  {!selectedTable ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                      <Search className="h-12 w-12 mb-4 opacity-50" />
+                      <p>No table selected</p>
+                      <p className="text-sm">Select a table from the list to view its structure and data</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Table Schema */}
+                      <div>
+                        <h4 className="text-sm font-semibold mb-2">
+                          Schema
+                        </h4>
+                        <ScrollArea className="max-h-[25vh] rounded border">
+                          <div className="p-3 space-y-2">
+                            {schemaLoading ? (
+                              <div className="text-sm text-muted-foreground text-center py-4">
+                                <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
+                                Loading schema...
+                              </div>
+                            ) : !schemaData?.schema || schemaData.schema.length === 0 ? (
+                              <div className="text-sm text-muted-foreground text-center py-4">
+                                No schema information available
+                              </div>
+                            ) : (
+                              schemaData.schema.map((column, idx) => (
+                                <div key={idx}>
+                                  {idx > 0 && <Separator />}
+                                  <div className="flex items-center justify-between text-sm">
+                                    <span className="font-mono">{column.name}</span>
+                                    <Badge variant="outline" className="text-xs">{column.type}</Badge>
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </ScrollArea>
+                      </div>
+
+                      {/* Sample Data */}
+                      <div>
+                        <h4 className="text-sm font-semibold mb-2">
+                          Sample Data (10 rows)
+                        </h4>
+                        <ScrollArea className="max-h-[25vh] rounded border">
+                          <div className="p-3">
+                            {!tableData?.data || tableData.data.rows.length === 0 ? (
+                              <div className="text-sm text-muted-foreground text-center py-4">
+                                {!tableData ? (
+                                  <>
+                                    <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
+                                    <p>Loading data...</p>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Database className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                                    <p>No data in table</p>
+                                  </>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                  <thead>
+                                    <tr className="border-b">
+                                      {tableData.data.columns.map((col, idx) => (
+                                        <th key={idx} className="text-left p-2 font-semibold whitespace-nowrap">
+                                          {col}
+                                        </th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {tableData.data.rows.map((row, rowIdx) => (
+                                      <tr key={rowIdx} className="border-b hover:bg-muted/50">
+                                        {row.map((cell, cellIdx) => (
+                                          <td key={cellIdx} className="p-2 max-w-xs truncate">
+                                            {cell}
+                                          </td>
+                                        ))}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        </ScrollArea>
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
-          )}
-
-          {/* Container Details */}
-          {isRunning && inspect?.container && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Container Details</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Image</span>
-                  <code className="text-sm bg-muted px-2 py-1 rounded">{inspect.container.image}</code>
-                </div>
-                <Separator />
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Container ID</span>
-                  <code className="text-sm bg-muted px-2 py-1 rounded">{inspect.container.id}</code>
-                </div>
-                {inspect.container.network?.ip_address && (
-                  <>
-                    <Separator />
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-muted-foreground">Internal IP</span>
-                      <code className="text-sm bg-muted px-2 py-1 rounded">{inspect.container.network.ip_address}</code>
-                    </div>
-                  </>
-                )}
-                <Separator />
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Processes</span>
-                  <span>{stats?.pids || '—'}</span>
-                </div>
-              </CardContent>
-            </Card>
           )}
         </TabsContent>
       </Tabs>

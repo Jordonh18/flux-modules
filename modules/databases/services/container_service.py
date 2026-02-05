@@ -781,7 +781,7 @@ class ContainerService:
             elif db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB):
                 cmd = ["podman", "exec", name_or_id,
                        "mysql", "-u", username, f"-p{password}", "-N", "-e",
-                       f"SELECT CONCAT(ROUND(SUM(data_length + index_length) / 1024 / 1024, 2), ' MB') FROM information_schema.tables WHERE table_schema = '{database}';"]
+                       f"SELECT COALESCE(CONCAT(ROUND(SUM(data_length + index_length) / 1024 / 1024, 2), ' MB'), '0.00 MB') FROM information_schema.tables WHERE table_schema = '{database}';"]
             elif db_type == DatabaseType.MONGODB:
                 cmd = ["podman", "exec", name_or_id,
                        "mongosh", "-u", username, "-p", password, "--authenticationDatabase", "admin",
@@ -816,10 +816,194 @@ class ContainerService:
                         return {"size": output}
                 return {"size": output.strip()}
             
-            return {"error": stderr.decode()}
+            error_msg = stderr.decode().strip()
+            print(f"Error getting database size for {name_or_id}: {error_msg}")
+            return {"error": error_msg if error_msg else "Unknown error"}
         except Exception as e:
+            print(f"Exception getting database size: {str(e)}")
             return {"error": f"Error getting database size: {str(e)}"}
-
-
-# Module-level instance
+    
+    @staticmethod
+    async def list_database_tables(name_or_id: str, db_type: DatabaseType, database: str, username: str, password: str) -> list:
+        """List all tables in the database"""
+        try:
+            if db_type == DatabaseType.POSTGRESQL:
+                cmd = ["podman", "exec", "-e", f"PGPASSWORD={password}", name_or_id,
+                       "psql", "-U", username, "-d", database, "-t", "-c",
+                       "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;"]
+            elif db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB):
+                cmd = ["podman", "exec", name_or_id,
+                       "mysql", "-u", username, f"-p{password}", database, "-N", "-e",
+                       "SHOW TABLES;"]
+            elif db_type == DatabaseType.MONGODB:
+                cmd = ["podman", "exec", name_or_id,
+                       "mongosh", "-u", username, "-p", password, "--authenticationDatabase", "admin",
+                       database, "--quiet", "--eval", "JSON.stringify(db.getCollectionNames())"]
+            elif db_type == DatabaseType.REDIS:
+                return []  # Redis doesn't have tables
+            else:
+                return []
+            
+            result = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await result.communicate()
+            
+            if result.returncode == 0:
+                output = stdout.decode().strip()
+                if db_type == DatabaseType.MONGODB:
+                    try:
+                        tables = json.loads(output)
+                        return tables if isinstance(tables, list) else []
+                    except:
+                        print(f"Error parsing MongoDB tables: {output}")
+                        return []
+                # Split by newlines and filter empty
+                tables = [t.strip() for t in output.split('\n') if t.strip()]
+                return tables
+            
+            error_msg = stderr.decode().strip()
+            print(f"Error listing tables for {name_or_id}: {error_msg}")
+            return []
+        except Exception as e:
+            print(f"Exception listing tables: {str(e)}")
+            return []
+    
+    @staticmethod
+    async def get_table_schema(name_or_id: str, db_type: DatabaseType, database: str, username: str, password: str, table_name: str) -> list:
+        """Get the schema/structure of a table"""
+        try:
+            if db_type == DatabaseType.POSTGRESQL:
+                cmd = ["podman", "exec", "-e", f"PGPASSWORD={password}", name_or_id,
+                       "psql", "-U", username, "-d", database, "-c",
+                       f"SELECT column_name, data_type, character_maximum_length, is_nullable FROM information_schema.columns WHERE table_name = '{table_name}' ORDER BY ordinal_position;"]
+            elif db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB):
+                cmd = ["podman", "exec", name_or_id,
+                       "mysql", "-u", username, f"-p{password}", database, "-e",
+                       f"DESCRIBE {table_name};"]
+            elif db_type == DatabaseType.MONGODB:
+                # MongoDB is schemaless, return sample document structure
+                cmd = ["podman", "exec", name_or_id,
+                       "mongosh", "-u", username, "-p", password, "--authenticationDatabase", "admin",
+                       database, "--quiet", "--eval", f"JSON.stringify(db.{table_name}.findOne())"]
+            else:
+                return []
+            
+            result = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await result.communicate()
+            
+            if result.returncode == 0:
+                output = stdout.decode().strip()
+                if db_type == DatabaseType.MONGODB:
+                    try:
+                        doc = json.loads(output)
+                        if doc:
+                            # Convert document to schema-like format
+                            schema = []
+                            for key, value in doc.items():
+                                schema.append({
+                                    "name": key,
+                                    "type": type(value).__name__,
+                                    "nullable": "YES"
+                                })
+                            return schema
+                    except:
+                        pass
+                    return []
+                
+                # Parse output into structured data
+                lines = output.split('\n')
+                schema = []
+                for line in lines[2:]:  # Skip header rows
+                    if line.strip() and not line.startswith('-'):
+                        parts = [p.strip() for p in line.split('|')]
+                        if len(parts) >= 2:
+                            if db_type == DatabaseType.POSTGRESQL and len(parts) >= 4:
+                                schema.append({
+                                    "name": parts[0],
+                                    "type": parts[1] + (f"({parts[2]})" if parts[2] else ""),
+                                    "nullable": parts[3]
+                                })
+                            elif db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB):
+                                schema.append({
+                                    "name": parts[0],
+                                    "type": parts[1] if len(parts) > 1 else "unknown",
+                                    "nullable": parts[2] if len(parts) > 2 else "YES"
+                                })
+                return schema
+            
+            return []
+        except Exception as e:
+            print(f"Error getting table schema: {str(e)}")
+            return []
+    
+    @staticmethod
+    async def get_table_data(name_or_id: str, db_type: DatabaseType, database: str, username: str, password: str, table_name: str, limit: int = 10) -> dict:
+        """Get sample data from a table"""
+        try:
+            if db_type == DatabaseType.POSTGRESQL:
+                cmd = ["podman", "exec", "-e", f"PGPASSWORD={password}", name_or_id,
+                       "psql", "-U", username, "-d", database, "-c",
+                       f"SELECT * FROM {table_name} LIMIT {limit};"]
+            elif db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB):
+                cmd = ["podman", "exec", name_or_id,
+                       "mysql", "-u", username, f"-p{password}", database, "-e",
+                       f"SELECT * FROM {table_name} LIMIT {limit};"]
+            elif db_type == DatabaseType.MONGODB:
+                cmd = ["podman", "exec", name_or_id,
+                       "mongosh", "-u", username, "-p", password, "--authenticationDatabase", "admin",
+                       database, "--quiet", "--eval", f"JSON.stringify(db.{table_name}.find().limit({limit}).toArray())"]
+            else:
+                return {"rows": [], "columns": []}
+            
+            result = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await result.communicate()
+            
+            if result.returncode == 0:
+                output = stdout.decode().strip()
+                
+                if db_type == DatabaseType.MONGODB:
+                    try:
+                        docs = json.loads(output)
+                        if docs and len(docs) > 0:
+                            columns = list(docs[0].keys())
+                            rows = [[str(doc.get(col, '')) for col in columns] for doc in docs]
+                            return {"rows": rows, "columns": columns}
+                    except:
+                        pass
+                    return {"rows": [], "columns": []}
+                
+                # Parse tabular output
+                lines = output.split('\n')
+                if len(lines) < 3:
+                    return {"rows": [], "columns": []}
+                
+                # Extract column names from header
+                header = lines[0]
+                columns = [col.strip() for col in header.split('|') if col.strip()]
+                
+                # Extract data rows
+                rows = []
+                for line in lines[2:]:  # Skip header and separator
+                    if line.strip() and not line.startswith('-') and '(' not in line:
+                        parts = [p.strip() for p in line.split('|')]
+                        if len(parts) >= len(columns):
+                            rows.append(parts[:len(columns)])
+                
+                return {"rows": rows[:limit], "columns": columns}
+            
+            return {"rows": [], "columns": []}
+        except Exception as e:
+            print(f"Error getting table data: {str(e)}")
+            return {"rows": [], "columns": []}
 container_service = ContainerService()

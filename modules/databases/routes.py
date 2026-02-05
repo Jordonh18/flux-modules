@@ -687,3 +687,80 @@ async def delete_backup(
     
     return {"success": True, "message": "Backup deleted"}
 
+
+@router.get("/databases/{database_id}/tables")
+async def list_tables(
+    database_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:read"))
+):
+    """
+    List all tables in the database.
+    """
+    result = await db.execute(text(
+        "SELECT container_name, database_type, database_name, username, password FROM module_databases WHERE id = :id"
+    ), {"id": database_id})
+    row = result.fetchone()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Database not found")
+    
+    db_type = DatabaseType(row.database_type)
+    tables = await ContainerService.list_database_tables(
+        row.container_name, db_type, row.database_name, row.username, row.password
+    )
+    
+    return {"tables": tables}
+
+
+@router.get("/databases/{database_id}/tables/{table_name}/schema")
+async def get_table_schema(
+    database_id: int,
+    table_name: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:read"))
+):
+    """
+    Get the schema/structure of a specific table.
+    """
+    result = await db.execute(text(
+        "SELECT container_name, database_type, database_name, username, password FROM module_databases WHERE id = :id"
+    ), {"id": database_id})
+    row = result.fetchone()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Database not found")
+    
+    db_type = DatabaseType(row.database_type)
+    schema = await ContainerService.get_table_schema(
+        row.container_name, db_type, row.database_name, row.username, row.password, table_name
+    )
+    
+    return {"schema": schema}
+
+
+@router.get("/databases/{database_id}/tables/{table_name}/data")
+async def get_table_data(
+    database_id: int,
+    table_name: str,
+    limit: int = 10,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:read"))
+):
+    """
+    Get sample data from a specific table.
+    """
+    result = await db.execute(text(
+        "SELECT container_name, database_type, database_name, username, password FROM module_databases WHERE id = :id"
+    ), {"id": database_id})
+    row = result.fetchone()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Database not found")
+    
+    db_type = DatabaseType(row.database_type)
+    data = await ContainerService.get_table_data(
+        row.container_name, db_type, row.database_name, row.username, row.password, table_name, limit
+    )
+    
+    return {"data": data}
