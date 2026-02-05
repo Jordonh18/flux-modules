@@ -1,0 +1,19 @@
+{
+  "name": "Flux Module Registry",
+  "description": "Official module registry for Flux",
+  "version": "1.0.0",
+  "author": "Flux Team",
+  "website": "https://github.com/Jordonh18/flux-modules",
+  "modules": [
+    {
+      "name": "Databases",
+      "display_name": "Databases",
+      "description": "Database management and exploration tools for Flux",
+      "author": "Flux Team",
+      "latest_version": "1.0.0",
+      "min_flux_version": "1.0.0",
+      "tags": ["database", "admin", "management"],
+      "downloads": 0
+    }
+  ]
+}

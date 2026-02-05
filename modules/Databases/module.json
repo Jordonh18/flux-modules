@@ -1,0 +1,33 @@
+{
+  "name": "Databases",
+  "display_name": "Databases",
+  "version": "1.0.0",
+  "description": "Database management and exploration tools for Flux",
+  "author": "Flux Team",
+  "license": "MIT",
+  "min_app_version": "1.0.0",
+  "hooks": {},
+  "permissions": [
+    {
+      "name": "databases:read",
+      "display_name": "View Database",
+      "description": "Access the database management page",
+      "resource": "databases",
+      "action": "read"
+    }
+  ],
+  "navigation": [
+    {
+      "menu": "main",
+      "title": "Database",
+      "path": "/database",
+      "icon": "Database",
+      "required_permission": "databases:read"
+    }
+  ],
+  "dependencies": [],
+  "frontend": {
+    "enabled": true,
+    "entry": "frontend/pages/DatabasePage.tsx"
+  }
+}
