@@ -93,7 +93,8 @@ const databasesApi = {
   getPodmanStatus: () => api.get<PodmanStatus>('/modules/databases/podman/status').then(r => r.data),
   installPodman: () => api.post<PodmanStatus>('/modules/databases/podman/install').then(r => r.data),
   getDatabases: () => api.get<DatabaseInfo[]>('/modules/databases/databases').then(r => r.data),
-  createDatabase: (data: CreateDatabaseRequest) => api.post('/modules/databases/databases', data).then(r => r.data),
+  createDatabase: (data: CreateDatabaseRequest) => 
+    api.post('/modules/databases/databases', data, { timeout: 360000 }).then(r => r.data), // 6 min timeout for image pulls
   startDatabase: (id: number) => api.post(`/modules/databases/databases/${id}/start`).then(r => r.data),
   stopDatabase: (id: number) => api.post(`/modules/databases/databases/${id}/stop`).then(r => r.data),
   deleteDatabase: (id: number) => api.delete(`/modules/databases/databases/${id}`).then(r => r.data),
@@ -142,6 +143,11 @@ function DatabasesPageContent() {
 
   const createDatabaseMutation = useMutation({
     mutationFn: databasesApi.createDatabase,
+    onMutate: () => {
+      toast.info('Creating database... This may take a few minutes if the image needs to be downloaded.', {
+        duration: 10000,
+      });
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['databases', 'list'] });
       setIsCreateModalOpen(false);
@@ -149,7 +155,7 @@ function DatabasesPageContent() {
       toast.success(data.message || 'Database created successfully');
     },
     onError: (err: any) => {
-      toast.error(err.response?.data?.detail || 'Failed to create database');
+      toast.error(err.response?.data?.detail || err.message || 'Failed to create database');
     },
   });
 
@@ -481,10 +487,8 @@ function DatabasesPageContent() {
                 Cancel
               </Button>
               <Button type="submit" disabled={createDatabaseMutation.isPending}>
-                {createDatabaseMutation.isPending ? (
+                {createDatabaseMutation.isPending && (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Plus className="mr-2 h-4 w-4" />
                 )}
                 Create
               </Button>

@@ -353,12 +353,26 @@ class ContainerService:
             ]
         
         try:
+            # Create container (with reasonable timeout for image pull + start)
             result = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, stderr = await result.communicate()
+            
+            try:
+                # Wait up to 5 minutes for container creation (includes image pull time)
+                stdout, stderr = await asyncio.wait_for(
+                    result.communicate(),
+                    timeout=300.0  # 5 minutes
+                )
+            except asyncio.TimeoutError:
+                result.kill()
+                raise RuntimeError(
+                    "Container creation timed out (5 min). "
+                    "This usually means the image is being downloaded. "
+                    "Try running 'podman pull " + image + "' manually first."
+                )
             
             if result.returncode != 0:
                 raise RuntimeError(f"Failed to create container: {stderr.decode()}")
