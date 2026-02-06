@@ -1,4 +1,4 @@
-import { useState, useEffect, ChangeEvent } from 'react';
+import React, { useState, useEffect, ChangeEvent } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -183,14 +183,9 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                 <SelectContent className="max-h-[400px]">
                   {DATABASE_TYPES.map((type) => (
                     <SelectItem key={type.value} value={type.value}>
-                      <div className="flex flex-col items-start w-full py-1">
-                        <div className="flex items-center gap-2">
-                          <span>{type.icon}</span>
-                          <span className="font-medium">{type.label}</span>
-                        </div>
-                        <span className="text-[11px] text-muted-foreground ml-6">
-                          {type.useCase}
-                        </span>
+                      <div className="flex items-center gap-2">
+                        <span>{type.icon}</span>
+                        <span>{type.label}</span>
                       </div>
                     </SelectItem>
                   ))}
@@ -223,115 +218,70 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="max-h-[400px]">
-                  {/* B-series Group */}
-                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50">
-                    💰 Burstable - Cost-Effective
-                  </div>
-                  <div className="px-2 py-1 text-[10px] text-muted-foreground italic">
-                    Variable CPU usage, dev/test workloads
-                  </div>
-                  {DATABASE_SKUS.filter(sku => sku.series === 'burstable').map((sku) => (
-                    <SelectItem key={sku.id} value={sku.id}>
-                      <div className="flex flex-col items-start w-full py-1">
-                        <div className="flex items-center gap-2 w-full">
+                  {/* B-series */}
+                  {DATABASE_SKUS.filter(sku => sku.series === 'burstable').map((sku, idx) => (
+                    <React.Fragment key={sku.id}>
+                      {idx === 0 && <div className="border-b my-1" />}
+                      <SelectItem value={sku.id}>
+                        <div className="flex items-center gap-2">
                           <span className="font-semibold text-sm">{sku.name}</span>
                           <span className="text-xs text-muted-foreground">
                             {Math.round(sku.memoryMb / 1024)}GB • {sku.cpus}vCPU
                           </span>
                         </div>
-                        <span className="text-[11px] text-muted-foreground">
-                          {sku.useCase}
-                        </span>
-                      </div>
-                    </SelectItem>
+                      </SelectItem>
+                    </React.Fragment>
                   ))}
                   
-                  {/* D-series Group */}
-                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50 mt-1">
-                    ⚖️ General Purpose - Balanced
-                  </div>
-                  <div className="px-2 py-1 text-[10px] text-muted-foreground italic">
-                    Balanced CPU:RAM ratio, most production workloads
-                  </div>
+                  {/* D-series */}
+                  <div className="border-b my-1" />
                   {DATABASE_SKUS.filter(sku => sku.series === 'general').map((sku) => (
                     <SelectItem key={sku.id} value={sku.id}>
-                      <div className="flex flex-col items-start w-full py-1">
-                        <div className="flex items-center gap-2 w-full">
-                          <span className="font-semibold text-sm">{sku.name}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {Math.round(sku.memoryMb / 1024)}GB • {sku.cpus}vCPU
-                          </span>
-                          {sku.recommended && (
-                            <span className="text-[10px] px-1.5 py-0.5 bg-green-500/10 text-green-600 dark:text-green-400 rounded">
-                              Recommended
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-[11px] text-muted-foreground">
-                          {sku.useCase}
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-sm">{sku.name}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {Math.round(sku.memoryMb / 1024)}GB • {sku.cpus}vCPU
                         </span>
+                        {sku.recommended && (
+                          <span className="text-[10px] px-1.5 py-0.5 bg-green-500/10 text-green-600 dark:text-green-400 rounded">
+                            Recommended
+                          </span>
+                        )}
                       </div>
                     </SelectItem>
                   ))}
                   
-                  {/* E-series Group */}
-                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50 mt-1">
-                    🧠 Memory Optimized - High RAM
-                  </div>
-                  <div className="px-2 py-1 text-[10px] text-muted-foreground italic">
-                    4:1 RAM:CPU ratio, caching & in-memory databases
-                  </div>
+                  {/* E-series */}
+                  <div className="border-b my-1" />
                   {DATABASE_SKUS.filter(sku => sku.series === 'memory').map((sku) => (
                     <SelectItem key={sku.id} value={sku.id}>
-                      <div className="flex flex-col items-start w-full py-1">
-                        <div className="flex items-center gap-2 w-full">
-                          <span className="font-semibold text-sm">{sku.name}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {Math.round(sku.memoryMb / 1024)}GB • {sku.cpus}vCPU
-                          </span>
-                        </div>
-                        <span className="text-[11px] text-muted-foreground">
-                          {sku.useCase}
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-sm">{sku.name}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {Math.round(sku.memoryMb / 1024)}GB • {sku.cpus}vCPU
                         </span>
                       </div>
                     </SelectItem>
                   ))}
                   
-                  {/* F-series Group */}
-                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50 mt-1">
-                    ⚡ Compute Optimized - High CPU
-                  </div>
-                  <div className="px-2 py-1 text-[10px] text-muted-foreground italic">
-                    1:1 RAM:CPU ratio, CPU-intensive processing
-                  </div>
+                  {/* F-series */}
+                  <div className="border-b my-1" />
                   {DATABASE_SKUS.filter(sku => sku.series === 'compute').map((sku) => (
                     <SelectItem key={sku.id} value={sku.id}>
-                      <div className="flex flex-col items-start w-full py-1">
-                        <div className="flex items-center gap-2 w-full">
-                          <span className="font-semibold text-sm">{sku.name}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {Math.round(sku.memoryMb / 1024)}GB • {sku.cpus}vCPU
-                          </span>
-                        </div>
-                        <span className="text-[11px] text-muted-foreground">
-                          {sku.useCase}
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-sm">{sku.name}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {Math.round(sku.memoryMb / 1024)}GB • {sku.cpus}vCPU
                         </span>
                       </div>
                     </SelectItem>
                   ))}
                   
                   {/* Custom */}
-                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50 mt-1">
-                    🎛️ Custom
-                  </div>
+                  <div className="border-b my-1" />
                   {DATABASE_SKUS.filter(sku => sku.series === 'custom').map((sku) => (
                     <SelectItem key={sku.id} value={sku.id}>
-                      <div className="flex flex-col items-start w-full py-1">
-                        <span className="font-semibold text-sm">{sku.name}</span>
-                        <span className="text-[11px] text-muted-foreground">
-                          {sku.useCase}
-                        </span>
-                      </div>
+                      <span className="font-semibold text-sm">{sku.name}</span>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -348,54 +298,14 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="10">
-                    <div className="flex flex-col items-start">
-                      <span className="font-medium">10 GB</span>
-                      <span className="text-[10px] text-muted-foreground">Dev/test only</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="20">
-                    <div className="flex flex-col items-start">
-                      <span className="font-medium">20 GB</span>
-                      <span className="text-[10px] text-muted-foreground">Small databases</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="50">
-                    <div className="flex flex-col items-start">
-                      <span className="font-medium">50 GB</span>
-                      <span className="text-[10px] text-muted-foreground">Standard apps</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="100">
-                    <div className="flex flex-col items-start">
-                      <span className="font-medium">100 GB</span>
-                      <span className="text-[10px] text-muted-foreground">Medium workloads</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="200">
-                    <div className="flex flex-col items-start">
-                      <span className="font-medium">200 GB</span>
-                      <span className="text-[10px] text-muted-foreground">Large datasets</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="500">
-                    <div className="flex flex-col items-start">
-                      <span className="font-medium">500 GB</span>
-                      <span className="text-[10px] text-muted-foreground">Enterprise scale</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="1024">
-                    <div className="flex flex-col items-start">
-                      <span className="font-medium">1 TB</span>
-                      <span className="text-[10px] text-muted-foreground">Data warehouses</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="2048">
-                    <div className="flex flex-col items-start">
-                      <span className="font-medium">2 TB</span>
-                      <span className="text-[10px] text-muted-foreground">Maximum scale</span>
-                    </div>
-                  </SelectItem>
+                  <SelectItem value="10">10 GB</SelectItem>
+                  <SelectItem value="20">20 GB</SelectItem>
+                  <SelectItem value="50">50 GB</SelectItem>
+                  <SelectItem value="100">100 GB</SelectItem>
+                  <SelectItem value="200">200 GB</SelectItem>
+                  <SelectItem value="500">500 GB</SelectItem>
+                  <SelectItem value="1024">1 TB</SelectItem>
+                  <SelectItem value="2048">2 TB</SelectItem>
                 </SelectContent>
               </Select>
               {formState.sku === 'custom' && (
