@@ -1,11 +1,12 @@
--- Rollback migration for Databases module
+-- Databases Module - Rollback Schema
 -- Migration: 001_initial.down.sql
 --
--- This file undoes the changes made in 001_initial.sql
+-- Drops all tables created by this module.
 
--- Drop indexes
-DROP INDEX IF EXISTS idx_module_databases_container_name;
-DROP INDEX IF EXISTS idx_module_databases_type;
+DROP INDEX IF EXISTS idx_databases_backups_database_id;
+DROP INDEX IF EXISTS idx_databases_instances_container_name;
+DROP INDEX IF EXISTS idx_databases_instances_type;
+DROP INDEX IF EXISTS idx_databases_instances_status;
 
--- Drop table
-DROP TABLE IF EXISTS module_databases;
+DROP TABLE IF EXISTS databases_backups;
+DROP TABLE IF EXISTS databases_instances;

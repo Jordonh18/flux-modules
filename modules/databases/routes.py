@@ -260,7 +260,7 @@ async def list_databases(
         SELECT id, container_id, container_name, database_type, host, port, 
                database_name, username, password, status, error_message, created_at,
                sku, memory_limit_mb, cpu_limit, storage_limit_gb, external_access, tls_enabled
-        FROM module_databases
+        FROM databases_instances
         ORDER BY created_at DESC
     """))
     stored_dbs = result.fetchall()
@@ -389,7 +389,7 @@ async def create_database(
         storage_limit_gb = sku_config["storage_gb"]
     
     # Get already-used ports from database (including creating databases)
-    port_result = await db.execute(text("SELECT port FROM module_databases"))
+    port_result = await db.execute(text("SELECT port FROM databases_instances"))
     used_ports = {row.port for row in port_result.fetchall()}
     
     # Generate container name and credentials upfront
@@ -437,7 +437,7 @@ async def create_database(
     try:
         # Insert database record immediately with 'creating' status and config
         result = await db.execute(text("""
-            INSERT INTO module_databases 
+            INSERT INTO databases_instances 
             (container_id, container_name, database_type, host, port, database_name, username, password, status,
              sku, memory_limit_mb, cpu_limit, storage_limit_gb, external_access, tls_enabled)
             VALUES (:container_id, :container_name, :database_type, :host, :port, :database_name, :username, :password, 'creating',
@@ -486,7 +486,7 @@ async def create_database(
                     try:
                         async with get_db_context() as background_db:
                             await background_db.execute(text("""
-                                UPDATE module_databases 
+                                UPDATE databases_instances 
                                 SET tls_cert_path = :tls_cert_path, tls_key_path = :tls_key_path, updated_at = datetime('now')
                                 WHERE id = :id
                             """), {
@@ -519,7 +519,7 @@ async def create_database(
                 try:
                     async with get_db_context() as background_db:
                         await background_db.execute(text("""
-                            UPDATE module_databases 
+                            UPDATE databases_instances 
                             SET container_id = :container_id, volume_path = :volume_path, 
                                 host = :host, port = :port,
                                 status = 'running', error_message = NULL, updated_at = datetime('now')
@@ -540,7 +540,7 @@ async def create_database(
                 try:
                     async with get_db_context() as background_db:
                         await background_db.execute(text("""
-                            UPDATE module_databases 
+                            UPDATE databases_instances 
                             SET status = 'error', error_message = :error, updated_at = datetime('now')
                             WHERE id = :id
                         """), {
@@ -602,7 +602,7 @@ async def start_database(
     Start a stopped database container.
     """
     result = await db.execute(text(
-        "SELECT container_name FROM module_databases WHERE id = :id"
+        "SELECT container_name FROM databases_instances WHERE id = :id"
     ), {"id": database_id})
     row = result.fetchone()
     
@@ -613,7 +613,7 @@ async def start_database(
     if success:
         # Clear any stale error messages when container starts successfully
         await db.execute(text("""
-            UPDATE module_databases 
+            UPDATE databases_instances 
             SET status = 'running', error_message = NULL, updated_at = datetime('now')
             WHERE id = :id
         """), {"id": database_id})
@@ -632,7 +632,7 @@ async def stop_database(
     Stop a running database container.
     """
     result = await db.execute(text(
-        "SELECT container_name FROM module_databases WHERE id = :id"
+        "SELECT container_name FROM databases_instances WHERE id = :id"
     ), {"id": database_id})
     row = result.fetchone()
     
@@ -655,7 +655,7 @@ async def restart_database(
     Restart a database container.
     """
     result = await db.execute(text(
-        "SELECT container_name FROM module_databases WHERE id = :id"
+        "SELECT container_name FROM databases_instances WHERE id = :id"
     ), {"id": database_id})
     row = result.fetchone()
     
@@ -666,7 +666,7 @@ async def restart_database(
     if success:
         # Clear any stale error messages when container restarts successfully
         await db.execute(text("""
-            UPDATE module_databases 
+            UPDATE databases_instances 
             SET status = 'running', error_message = NULL, updated_at = datetime('now')
             WHERE id = :id
         """), {"id": database_id})
@@ -686,7 +686,7 @@ async def delete_database(
     Also removes persistent storage volumes.
     """
     result = await db.execute(text(
-        "SELECT container_name FROM module_databases WHERE id = :id"
+        "SELECT container_name FROM databases_instances WHERE id = :id"
     ), {"id": database_id})
     row = result.fetchone()
     
@@ -710,7 +710,7 @@ async def delete_database(
             print(f"Warning: Failed to release VNet IP for {row.container_name}: {vnet_err}")
     
     # Remove from database
-    await db.execute(text("DELETE FROM module_databases WHERE id = :id"), {"id": database_id})
+    await db.execute(text("DELETE FROM databases_instances WHERE id = :id"), {"id": database_id})
     await db.commit()
     
     return {"success": True, "message": "Database deleted"}
@@ -727,7 +727,7 @@ async def get_database_logs(
     Get logs from a database container.
     """
     result = await db.execute(text(
-        "SELECT container_name FROM module_databases WHERE id = :id"
+        "SELECT container_name FROM databases_instances WHERE id = :id"
     ), {"id": database_id})
     row = result.fetchone()
     
@@ -748,7 +748,7 @@ async def get_database_stats(
     Get container resource stats (CPU, memory, network, disk).
     """
     result = await db.execute(text(
-        "SELECT container_name FROM module_databases WHERE id = :id"
+        "SELECT container_name FROM databases_instances WHERE id = :id"
     ), {"id": database_id})
     row = result.fetchone()
     
@@ -769,7 +769,7 @@ async def inspect_database(
     Get detailed container information.
     """
     result = await db.execute(text(
-        "SELECT container_name, database_type, database_name, username, password FROM module_databases WHERE id = :id"
+        "SELECT container_name, database_type, database_name, username, password FROM databases_instances WHERE id = :id"
     ), {"id": database_id})
     row = result.fetchone()
     
@@ -805,7 +805,7 @@ async def backup_database(
     from datetime import datetime
     
     result = await db.execute(text(
-        "SELECT container_name, database_type, database_name, username, password FROM module_databases WHERE id = :id"
+        "SELECT container_name, database_type, database_name, username, password FROM databases_instances WHERE id = :id"
     ), {"id": database_id})
     row = result.fetchone()
     
@@ -834,7 +834,7 @@ async def backup_database(
     if success:
         # Store backup record
         await db.execute(text("""
-            INSERT INTO module_database_backups (database_id, backup_path, backup_size, created_at)
+            INSERT INTO databases_backups (database_id, backup_path, backup_size, created_at)
             VALUES (:database_id, :backup_path, :backup_size, datetime('now'))
         """), {
             "database_id": database_id,
@@ -859,7 +859,7 @@ async def list_database_backups(
     """
     result = await db.execute(text("""
         SELECT id, backup_path, backup_size, created_at
-        FROM module_database_backups
+        FROM databases_backups
         WHERE database_id = :database_id
         ORDER BY created_at DESC
     """), {"database_id": database_id})
@@ -888,7 +888,7 @@ async def restore_database(
     """
     # Get database info
     db_result = await db.execute(text(
-        "SELECT container_name, database_type, database_name, username, password FROM module_databases WHERE id = :id"
+        "SELECT container_name, database_type, database_name, username, password FROM databases_instances WHERE id = :id"
     ), {"id": database_id})
     db_row = db_result.fetchone()
     
@@ -897,7 +897,7 @@ async def restore_database(
     
     # Get backup info
     backup_result = await db.execute(text(
-        "SELECT backup_path FROM module_database_backups WHERE id = :id AND database_id = :database_id"
+        "SELECT backup_path FROM databases_backups WHERE id = :id AND database_id = :database_id"
     ), {"id": backup_id, "database_id": database_id})
     backup_row = backup_result.fetchone()
     
@@ -929,7 +929,7 @@ async def delete_backup(
     import os
     
     result = await db.execute(text(
-        "SELECT backup_path FROM module_database_backups WHERE id = :id AND database_id = :database_id"
+        "SELECT backup_path FROM databases_backups WHERE id = :id AND database_id = :database_id"
     ), {"id": backup_id, "database_id": database_id})
     row = result.fetchone()
     
@@ -941,7 +941,7 @@ async def delete_backup(
         os.remove(row.backup_path)
     
     # Delete record
-    await db.execute(text("DELETE FROM module_database_backups WHERE id = :id"), {"id": backup_id})
+    await db.execute(text("DELETE FROM databases_backups WHERE id = :id"), {"id": backup_id})
     await db.commit()
     
     return {"success": True, "message": "Backup deleted"}
@@ -957,7 +957,7 @@ async def list_tables(
     List all tables in the database.
     """
     result = await db.execute(text(
-        "SELECT container_name, database_type, database_name, username, password FROM module_databases WHERE id = :id"
+        "SELECT container_name, database_type, database_name, username, password FROM databases_instances WHERE id = :id"
     ), {"id": database_id})
     row = result.fetchone()
     
@@ -983,7 +983,7 @@ async def get_table_schema(
     Get the schema/structure of a specific table.
     """
     result = await db.execute(text(
-        "SELECT container_name, database_type, database_name, username, password FROM module_databases WHERE id = :id"
+        "SELECT container_name, database_type, database_name, username, password FROM databases_instances WHERE id = :id"
     ), {"id": database_id})
     row = result.fetchone()
     
@@ -1010,7 +1010,7 @@ async def get_table_data(
     Get sample data from a specific table.
     """
     result = await db.execute(text(
-        "SELECT container_name, database_type, database_name, username, password FROM module_databases WHERE id = :id"
+        "SELECT container_name, database_type, database_name, username, password FROM databases_instances WHERE id = :id"
     ), {"id": database_id})
     row = result.fetchone()
     
