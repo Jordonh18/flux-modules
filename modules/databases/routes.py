@@ -37,15 +37,20 @@ router = ModuleRouter("databases")
 
 # ============================================================================
 # SKU Definitions (Azure-style tiers)
+# Series determine container scheduling behavior via Podman flags:
+#   B-series (Burstable): cpu-shares=512 — low priority, yields under contention
+#   D-series (General Purpose): cpu-shares=1024 — standard balanced performance
+#   E-series (Memory Optimized): swappiness=0, oom-score-adj=-500 — keeps data in RAM, OOM protected
+#   F-series (Compute Optimized): cpu-shares=2048, memory-swap=memory — high CPU priority, strict no-swap
 # ============================================================================
 
 SKU_DEFINITIONS = {
-    # B-series: Burstable (Cost-Effective for Variable Workloads)
+    # B-series: Burstable (Low CPU priority, deprioritized under host contention)
     "b1": {"memory_mb": 1024, "cpus": 0.5, "storage_gb": 10},
     "b2": {"memory_mb": 2048, "cpus": 1.0, "storage_gb": 20},
     "b4": {"memory_mb": 4096, "cpus": 2.0, "storage_gb": 40},
     
-    # D-series: General Purpose (Balanced CPU-to-Memory Ratio)
+    # D-series: General Purpose (Standard CPU priority, balanced defaults)
     "d2": {"memory_mb": 4096, "cpus": 2.0, "storage_gb": 50},
     "d4": {"memory_mb": 8192, "cpus": 4.0, "storage_gb": 100},
     "d8": {"memory_mb": 16384, "cpus": 8.0, "storage_gb": 200},
@@ -53,7 +58,7 @@ SKU_DEFINITIONS = {
     "d32": {"memory_mb": 65536, "cpus": 32.0, "storage_gb": 1024},
     "d64": {"memory_mb": 131072, "cpus": 64.0, "storage_gb": 2048},
     
-    # E-series: Memory Optimized (High Memory-to-CPU Ratio)
+    # E-series: Memory Optimized (No swap, OOM kill protection, data stays in RAM)
     "e2": {"memory_mb": 8192, "cpus": 2.0, "storage_gb": 50},
     "e4": {"memory_mb": 16384, "cpus": 4.0, "storage_gb": 100},
     "e8": {"memory_mb": 32768, "cpus": 8.0, "storage_gb": 200},
@@ -61,7 +66,7 @@ SKU_DEFINITIONS = {
     "e32": {"memory_mb": 131072, "cpus": 32.0, "storage_gb": 1024},
     "e64": {"memory_mb": 262144, "cpus": 64.0, "storage_gb": 2048},
     
-    # F-series: Compute Optimized (High CPU-to-Memory Ratio)
+    # F-series: Compute Optimized (High CPU priority, strict no-swap)
     "f2": {"memory_mb": 2048, "cpus": 2.0, "storage_gb": 30},
     "f4": {"memory_mb": 4096, "cpus": 4.0, "storage_gb": 60},
     "f8": {"memory_mb": 8192, "cpus": 8.0, "storage_gb": 120},
@@ -468,6 +473,7 @@ async def create_database(
                     external_access=request.external_access,
                     memory_limit_mb=memory_limit_mb,
                     cpu_limit=cpu_limit,
+                    sku=request.sku,
                     tls_cert_path=tls_cert_path,
                     tls_key_path=tls_key_path,
                 )

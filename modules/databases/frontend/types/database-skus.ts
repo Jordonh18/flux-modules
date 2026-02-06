@@ -11,7 +11,7 @@ export interface DatabaseSku {
 }
 
 export const DATABASE_SKUS: DatabaseSku[] = [
-  // B-series: Burstable (Cost-Effective)
+  // B-series: Burstable - Low CPU priority (cpu-shares=512), deprioritized under host contention
   { 
     id: 'b1', 
     name: 'B1', 
@@ -20,7 +20,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 0.5, 
     storageGb: 10,
     series: 'burstable',
-    useCase: 'Dev/test environments with minimal traffic'
+    useCase: 'Low CPU priority, yields under host contention'
   },
   { 
     id: 'b2', 
@@ -30,7 +30,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 1, 
     storageGb: 20,
     series: 'burstable',
-    useCase: 'Small apps with variable CPU usage patterns'
+    useCase: 'Low CPU priority, yields under host contention'
   },
   { 
     id: 'b4', 
@@ -40,10 +40,10 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 2, 
     storageGb: 40,
     series: 'burstable',
-    useCase: 'Staging environments that don\'t run 24/7'
+    useCase: 'Low CPU priority, yields under host contention'
   },
   
-  // D-series: General Purpose (Balanced)
+  // D-series: General Purpose - Standard CPU priority (cpu-shares=1024), balanced defaults
   { 
     id: 'd2', 
     name: 'D2', 
@@ -53,7 +53,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     storageGb: 50, 
     recommended: true,
     series: 'general',
-    useCase: 'Balanced workloads, web apps, small APIs'
+    useCase: 'Standard CPU priority, balanced performance'
   },
   { 
     id: 'd4', 
@@ -63,7 +63,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 4, 
     storageGb: 100,
     series: 'general',
-    useCase: 'Production apps with steady traffic'
+    useCase: 'Standard CPU priority, balanced performance'
   },
   { 
     id: 'd8', 
@@ -73,7 +73,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 8, 
     storageGb: 200,
     series: 'general',
-    useCase: 'High-traffic apps, e-commerce sites'
+    useCase: 'Standard CPU priority, balanced performance'
   },
   { 
     id: 'd16', 
@@ -83,7 +83,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 16, 
     storageGb: 500,
     series: 'general',
-    useCase: 'Large-scale production workloads'
+    useCase: 'Standard CPU priority, balanced performance'
   },
   { 
     id: 'd32', 
@@ -93,7 +93,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 32, 
     storageGb: 1024,
     series: 'general',
-    useCase: 'Mission-critical enterprise applications'
+    useCase: 'Standard CPU priority, balanced performance'
   },
   { 
     id: 'd64', 
@@ -103,10 +103,10 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 64, 
     storageGb: 2048,
     series: 'general',
-    useCase: 'Maximum scale general-purpose workloads'
+    useCase: 'Standard CPU priority, balanced performance'
   },
   
-  // E-series: Memory Optimized (High RAM)
+  // E-series: Memory Optimized - No swap (swappiness=0), OOM protection (oom-score-adj=-500)
   { 
     id: 'e2', 
     name: 'E2', 
@@ -115,7 +115,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 2, 
     storageGb: 50,
     series: 'memory',
-    useCase: 'Redis cache, session stores'
+    useCase: 'No swap, OOM kill protection, keeps data in RAM'
   },
   { 
     id: 'e4', 
@@ -125,7 +125,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 4, 
     storageGb: 100,
     series: 'memory',
-    useCase: 'In-memory databases, large caches'
+    useCase: 'No swap, OOM kill protection, keeps data in RAM'
   },
   { 
     id: 'e8', 
@@ -135,7 +135,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 8, 
     storageGb: 200,
     series: 'memory',
-    useCase: 'MongoDB with large datasets, Elasticsearch'
+    useCase: 'No swap, OOM kill protection, keeps data in RAM'
   },
   { 
     id: 'e16', 
@@ -145,7 +145,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 16, 
     storageGb: 500,
     series: 'memory',
-    useCase: 'Analytics, real-time data processing'
+    useCase: 'No swap, OOM kill protection, keeps data in RAM'
   },
   { 
     id: 'e32', 
@@ -155,7 +155,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 32, 
     storageGb: 1024,
     series: 'memory',
-    useCase: 'Data warehouses, big data analytics'
+    useCase: 'No swap, OOM kill protection, keeps data in RAM'
   },
   { 
     id: 'e64', 
@@ -165,10 +165,10 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 64, 
     storageGb: 2048,
     series: 'memory',
-    useCase: 'SAP HANA, massive in-memory workloads'
+    useCase: 'No swap, OOM kill protection, keeps data in RAM'
   },
   
-  // F-series: Compute Optimized (High CPU)
+  // F-series: Compute Optimized - High CPU priority (cpu-shares=2048), strict no-swap
   { 
     id: 'f2', 
     name: 'F2', 
@@ -177,7 +177,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 2, 
     storageGb: 30,
     series: 'compute',
-    useCase: 'CPU-heavy queries, batch processing'
+    useCase: 'High CPU priority, strict no-swap, favored under contention'
   },
   { 
     id: 'f4', 
@@ -187,7 +187,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 4, 
     storageGb: 60,
     series: 'compute',
-    useCase: 'Complex calculations, data transformations'
+    useCase: 'High CPU priority, strict no-swap, favored under contention'
   },
   { 
     id: 'f8', 
@@ -197,7 +197,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 8, 
     storageGb: 120,
     series: 'compute',
-    useCase: 'Analytics engines, computational workloads'
+    useCase: 'High CPU priority, strict no-swap, favored under contention'
   },
   { 
     id: 'f16', 
@@ -207,7 +207,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 16, 
     storageGb: 240,
     series: 'compute',
-    useCase: 'High-performance computing tasks'
+    useCase: 'High CPU priority, strict no-swap, favored under contention'
   },
   { 
     id: 'f32', 
@@ -217,7 +217,7 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 32, 
     storageGb: 480,
     series: 'compute',
-    useCase: 'Parallel processing, scientific computing'
+    useCase: 'High CPU priority, strict no-swap, favored under contention'
   },
   { 
     id: 'f64', 
@@ -227,10 +227,10 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 64, 
     storageGb: 960,
     series: 'compute',
-    useCase: 'Maximum CPU for intensive computation'
+    useCase: 'High CPU priority, strict no-swap, favored under contention'
   },
   
-  // Custom: User-defined
+  // Custom: User-defined resources, general purpose behavior
   { 
     id: 'custom', 
     name: 'Custom', 
@@ -239,6 +239,6 @@ export const DATABASE_SKUS: DatabaseSku[] = [
     cpus: 0, 
     storageGb: 0,
     series: 'custom',
-    useCase: 'Define exact resources for your needs'
+    useCase: 'Define exact resources, uses general purpose behavior'
   },
 ];

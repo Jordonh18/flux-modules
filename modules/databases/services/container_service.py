@@ -311,6 +311,7 @@ class ContainerService:
         external_access: bool = False,
         memory_limit_mb: Optional[int] = None,
         cpu_limit: Optional[float] = None,
+        sku: Optional[str] = None,
         enable_volumes: bool = True,  # Enable persistent storage by default
         tls_cert_path: Optional[str] = None,
         tls_key_path: Optional[str] = None,
@@ -327,8 +328,9 @@ class ContainerService:
             password: Database password (auto-generated if not provided)
             host_port: Host port to bind (auto-selected if not provided)
             external_access: Allow external network access (default: False, localhost only)
-            memory_limit_mb: Memory limit in MB (optional, for future SKU-based limits)
+            memory_limit_mb: Memory limit in MB (optional, for SKU-based limits)
             cpu_limit: CPU limit as decimal (e.g., 1.5 for 1.5 CPUs, optional)
+            sku: SKU tier identifier (e.g., 'b2', 'd4', 'e8', 'f16') - determines series behavior
             enable_volumes: Enable persistent storage volumes (default: True)
         
         Returns:
@@ -340,6 +342,12 @@ class ContainerService:
             - Process limits enforced (--pids-limit=100)
             - Network access restricted to localhost by default
             - Persistent volumes use SELinux :Z labels for rootless Podman
+        
+        Series Behavior:
+            - B-series (Burstable): Low CPU shares (512), lower priority under contention
+            - D-series (General Purpose): Standard CPU shares (1024), balanced performance
+            - E-series (Memory Optimized): No swap (swappiness=0), OOM protection (-500)
+            - F-series (Compute Optimized): High CPU shares (2048), strict no-swap
         """
         # Use provided values or generate new ones
         if not container_name:
@@ -471,11 +479,45 @@ class ContainerService:
                 "--cap-add=DAC_OVERRIDE",  # Needed for file access
             ])
         
-        # Optional resource limits (for future SKU-based limits in Phase 6)
+        # Optional resource limits (for SKU-based limits)
         if memory_limit_mb is not None and memory_limit_mb > 0:
             security_flags.append(f"--memory={memory_limit_mb}m")
         if cpu_limit is not None and cpu_limit > 0:
             security_flags.append(f"--cpus={cpu_limit}")
+        
+        # Series-specific performance flags
+        # These differentiate B/D/E/F series beyond just resource amounts
+        sku_series = (sku or "")[0].lower() if sku else "d"  # Default to general purpose
+        
+        if sku_series == "b":
+            # Burstable: Lower CPU priority, deprioritized under host contention
+            # Can burst to full vCPU count when idle, but yields under load
+            security_flags.extend([
+                "--cpu-shares=512",          # Half of default (1024) - lower scheduling priority
+            ])
+        elif sku_series == "e":
+            # Memory Optimized: Keep data in RAM, protect from OOM kills
+            # Ideal for in-memory databases, large caches, memory-heavy workloads
+            security_flags.extend([
+                "--cpu-shares=1024",         # Standard CPU priority
+                "--memory-swappiness=0",     # Never swap - keep all data in RAM
+                "--oom-score-adj=-500",      # Lower OOM kill priority (protected)
+            ])
+        elif sku_series == "f":
+            # Compute Optimized: Higher CPU priority, strict memory (no swap)
+            # Ideal for CPU-intensive analytics, computation, query processing
+            security_flags.extend([
+                "--cpu-shares=2048",         # Double default - higher scheduling priority
+            ])
+            # Strict no-swap: memory-swap = memory means zero swap allowed
+            if memory_limit_mb is not None and memory_limit_mb > 0:
+                security_flags.append(f"--memory-swap={memory_limit_mb}m")
+        else:
+            # D-series / General Purpose / Custom: Balanced defaults
+            # Standard priority, standard OOM behavior, swap allowed
+            security_flags.extend([
+                "--cpu-shares=1024",         # Default CPU priority
+            ])
         
         # Build volume mounts for persistent storage (with SELinux :Z labels for rootless Podman)
         volume_mounts = []
