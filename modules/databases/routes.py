@@ -85,12 +85,6 @@ class DatabaseTypeEnum(str, Enum):
     mariadb = "mariadb"
     mongodb = "mongodb"
     redis = "redis"
-    sqlserver = "sqlserver"
-    cassandra = "cassandra"
-    couchdb = "couchdb"
-    neo4j = "neo4j"
-    influxdb = "influxdb"
-    elasticsearch = "elasticsearch"
 
 
 class CreateDatabaseRequest(BaseModel):

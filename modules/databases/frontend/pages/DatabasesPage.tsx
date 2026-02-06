@@ -99,12 +99,6 @@ const DATABASE_TYPES = [
   { value: 'mariadb', label: 'MariaDB', icon: '🦭', description: 'Enhanced MySQL-compatible database' },
   { value: 'mongodb', label: 'MongoDB', icon: '🍃', description: 'Document-oriented NoSQL database' },
   { value: 'redis', label: 'Redis', icon: '🔴', description: 'In-memory data structure store' },
-  { value: 'sqlserver', label: 'SQL Server', icon: '🗄️', description: 'Microsoft enterprise relational database' },
-  { value: 'cassandra', label: 'Cassandra', icon: '🔷', description: 'Distributed wide-column NoSQL database' },
-  { value: 'couchdb', label: 'CouchDB', icon: '🛋️', description: 'Document database with HTTP API' },
-  { value: 'neo4j', label: 'Neo4j', icon: '🕸️', description: 'Leading graph database platform' },
-  { value: 'influxdb', label: 'InfluxDB', icon: '📈', description: 'Time series database for metrics' },
-  { value: 'elasticsearch', label: 'Elasticsearch', icon: '🔍', description: 'Distributed search and analytics engine' },
 ];
 
 // API functions

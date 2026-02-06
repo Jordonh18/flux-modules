@@ -12,17 +12,11 @@ import { DATABASE_SKUS } from '../types/database-skus';
 
 // Copy of DATABASE_TYPES from DatabasesPage.tsx
 const DATABASE_TYPES = [
-  { value: 'postgresql', label: 'PostgreSQL', icon: '🐘', description: 'Advanced relational DB', useCase: 'Complex queries, JSON, full-text search' },
-  { value: 'mysql', label: 'MySQL', icon: '🐬', description: 'Popular relational DB', useCase: 'Web apps, WordPress, reliable ACID transactions' },
-  { value: 'mariadb', label: 'MariaDB', icon: '🦭', description: 'MySQL-compatible DB', useCase: 'MySQL alternative with better performance' },
-  { value: 'mongodb', label: 'MongoDB', icon: '🍃', description: 'Document database', useCase: 'Flexible schemas, JSON-like documents, real-time' },
-  { value: 'redis', label: 'Redis', icon: '🔴', description: 'In-memory cache', useCase: 'Session storage, caching, pub/sub, queues' },
-  { value: 'sqlserver', label: 'SQL Server', icon: '🗄️', description: 'Microsoft enterprise DB', useCase: '.NET apps, enterprise Windows workloads' },
-  { value: 'cassandra', label: 'Cassandra', icon: '🔷', description: 'Wide-column NoSQL', useCase: 'Massive scale, time-series, IoT data' },
-  { value: 'couchdb', label: 'CouchDB', icon: '🛋️', description: 'Document DB with HTTP', useCase: 'Offline-first apps, sync, REST API' },
-  { value: 'neo4j', label: 'Neo4j', icon: '🕸️', description: 'Graph database', useCase: 'Relationships, social networks, recommendations' },
-  { value: 'influxdb', label: 'InfluxDB', icon: '📈', description: 'Time-series DB', useCase: 'Metrics, monitoring, IoT sensors, analytics' },
-  { value: 'elasticsearch', label: 'Elasticsearch', icon: '🔍', description: 'Search & analytics', useCase: 'Full-text search, log analysis, APM' },
+  { value: 'postgresql', label: 'PostgreSQL', icon: '🐘', description: 'Advanced open-source relational database' },
+  { value: 'mysql', label: 'MySQL', icon: '🐬', description: 'World\'s most popular open source database' },
+  { value: 'mariadb', label: 'MariaDB', icon: '🦭', description: 'Enhanced MySQL-compatible database' },
+  { value: 'mongodb', label: 'MongoDB', icon: '🍃', description: 'Document-oriented NoSQL database' },
+  { value: 'redis', label: 'Redis', icon: '🔴', description: 'In-memory data structure store' },
 ];
 
 interface CreateDatabaseDialogProps {
@@ -221,7 +215,11 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                   {/* B-series */}
                   {DATABASE_SKUS.filter(sku => sku.series === 'burstable').map((sku, idx) => (
                     <React.Fragment key={sku.id}>
-                      {idx === 0 && <div className="border-b my-1" />}
+                      {idx === 0 && (
+                        <div className="px-2 py-1 border-b">
+                          <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Burstable</span>
+                        </div>
+                      )}
                       <SelectItem value={sku.id}>
                         <div className="flex items-center gap-2">
                           <span className="font-semibold text-sm">{sku.name}</span>
@@ -234,7 +232,9 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                   ))}
                   
                   {/* D-series */}
-                  <div className="border-b my-1" />
+                  <div className="px-2 py-1 border-b">
+                    <span className="text-[10px] text-muted-foreground uppercase tracking-wide">General Purpose</span>
+                  </div>
                   {DATABASE_SKUS.filter(sku => sku.series === 'general').map((sku) => (
                     <SelectItem key={sku.id} value={sku.id}>
                       <div className="flex items-center gap-2">
@@ -252,7 +252,9 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                   ))}
                   
                   {/* E-series */}
-                  <div className="border-b my-1" />
+                  <div className="px-2 py-1 border-b">
+                    <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Memory Optimized</span>
+                  </div>
                   {DATABASE_SKUS.filter(sku => sku.series === 'memory').map((sku) => (
                     <SelectItem key={sku.id} value={sku.id}>
                       <div className="flex items-center gap-2">
@@ -265,7 +267,9 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                   ))}
                   
                   {/* F-series */}
-                  <div className="border-b my-1" />
+                  <div className="px-2 py-1 border-b">
+                    <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Compute Optimized</span>
+                  </div>
                   {DATABASE_SKUS.filter(sku => sku.series === 'compute').map((sku) => (
                     <SelectItem key={sku.id} value={sku.id}>
                       <div className="flex items-center gap-2">
@@ -278,7 +282,9 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                   ))}
                   
                   {/* Custom */}
-                  <div className="border-b my-1" />
+                  <div className="px-2 py-1 border-b">
+                    <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Custom</span>
+                  </div>
                   {DATABASE_SKUS.filter(sku => sku.series === 'custom').map((sku) => (
                     <SelectItem key={sku.id} value={sku.id}>
                       <span className="font-semibold text-sm">{sku.name}</span>

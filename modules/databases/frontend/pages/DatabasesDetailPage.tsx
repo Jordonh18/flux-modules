@@ -134,12 +134,6 @@ const DATABASE_TYPES: Record<string, { label: string; icon: string; description:
   mariadb: { label: 'MariaDB', icon: '🦭', description: 'Enhanced MySQL-compatible database' },
   mongodb: { label: 'MongoDB', icon: '🍃', description: 'Document-oriented NoSQL database' },
   redis: { label: 'Redis', icon: '🔴', description: 'In-memory data structure store' },
-  sqlserver: { label: 'SQL Server', icon: '🗄️', description: 'Microsoft enterprise relational database' },
-  cassandra: { label: 'Cassandra', icon: '🔷', description: 'Distributed wide-column NoSQL database' },
-  couchdb: { label: 'CouchDB', icon: '🛋️', description: 'Document database with HTTP API' },
-  neo4j: { label: 'Neo4j', icon: '🕸️', description: 'Leading graph database platform' },
-  influxdb: { label: 'InfluxDB', icon: '📈', description: 'Time series database for metrics' },
-  elasticsearch: { label: 'Elasticsearch', icon: '🔍', description: 'Distributed search and analytics engine' },
 };
 
 // API functions
