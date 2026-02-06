@@ -70,6 +70,13 @@ interface DatabaseInfo {
   password: string;
   created_at: string;
   error_message?: string;
+  sku?: string;
+  memory_limit_mb?: number;
+  cpu_limit?: number;
+  storage_limit_gb?: number;
+  external_access?: boolean;
+  tls_enabled?: boolean;
+  volume_path?: string;
 }
 
 interface ContainerStats {
@@ -127,6 +134,12 @@ const DATABASE_TYPES: Record<string, { label: string; icon: string; description:
   mariadb: { label: 'MariaDB', icon: '🦭', description: 'Enhanced MySQL-compatible database' },
   mongodb: { label: 'MongoDB', icon: '🍃', description: 'Document-oriented NoSQL database' },
   redis: { label: 'Redis', icon: '🔴', description: 'In-memory data structure store' },
+  sqlserver: { label: 'SQL Server', icon: '🗄️', description: 'Microsoft enterprise relational database' },
+  cassandra: { label: 'Cassandra', icon: '🔷', description: 'Distributed wide-column NoSQL database' },
+  couchdb: { label: 'CouchDB', icon: '🛋️', description: 'Document database with HTTP API' },
+  neo4j: { label: 'Neo4j', icon: '🕸️', description: 'Leading graph database platform' },
+  influxdb: { label: 'InfluxDB', icon: '📈', description: 'Time series database for metrics' },
+  elasticsearch: { label: 'Elasticsearch', icon: '🔍', description: 'Distributed search and analytics engine' },
 };
 
 // API functions
@@ -638,6 +651,99 @@ function DatabaseDetailPageContent() {
                     <div className="flex items-center justify-between">
                       <span className="text-sm text-muted-foreground">Started</span>
                       <span className="text-sm">{formatDate(inspect.container.state.started_at)}</span>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Compute & Storage SKU */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Instance Configuration</CardTitle>
+                <CardDescription>Compute and storage resources</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">SKU Tier</span>
+                  <Badge variant="outline" className="font-mono">
+                    {database.sku?.toUpperCase() || 'D1'}
+                  </Badge>
+                </div>
+                <Separator />
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground flex items-center gap-2">
+                    <Cpu className="h-4 w-4" /> vCPUs
+                  </span>
+                  <span className="font-mono">{database.cpu_limit || 1.0} {database.cpu_limit === 1 ? 'vCore' : 'vCores'}</span>
+                </div>
+                <Separator />
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground flex items-center gap-2">
+                    <MemoryStick className="h-4 w-4" /> Memory
+                  </span>
+                  <span className="font-mono">{((database.memory_limit_mb || 2048) / 1024).toFixed(1)} GB</span>
+                </div>
+                <Separator />
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground flex items-center gap-2">
+                    <HardDrive className="h-4 w-4" /> Storage
+                  </span>
+                  <span className="font-mono">{database.storage_limit_gb || 20} GB</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Network & Security */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Network & Security</CardTitle>
+                <CardDescription>Access and encryption settings</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground flex items-center gap-2">
+                    <Network className="h-4 w-4" /> Public Access
+                  </span>
+                  <Badge variant={database.external_access ? 'default' : 'secondary'}>
+                    {database.external_access ? 'Enabled' : 'Disabled'}
+                  </Badge>
+                </div>
+                {database.external_access && (
+                  <>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Public Endpoint</span>
+                      <code className="text-xs bg-muted px-2 py-1 rounded">
+                        0.0.0.0:{database.port}
+                      </code>
+                    </div>
+                  </>
+                )}
+                {!database.external_access && (
+                  <>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Private Endpoint</span>
+                      <code className="text-xs bg-muted px-2 py-1 rounded">
+                        127.0.0.1:{database.port}
+                      </code>
+                    </div>
+                  </>
+                )}
+                <Separator />
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">TLS/SSL</span>
+                  <Badge variant={database.tls_enabled ? 'default' : 'outline'}>
+                    {database.tls_enabled ? 'Enabled' : 'Not Configured'}
+                  </Badge>
+                </div>
+                {database.volume_path && (
+                  <>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Persistent Storage</span>
+                      <Badge variant="default">Enabled</Badge>
                     </div>
                   </>
                 )}

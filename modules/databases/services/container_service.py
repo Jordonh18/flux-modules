@@ -34,6 +34,12 @@ class DatabaseType(str, Enum):
     MARIADB = "mariadb"
     MONGODB = "mongodb"
     REDIS = "redis"
+    SQLSERVER = "sqlserver"
+    CASSANDRA = "cassandra"
+    COUCHDB = "couchdb"
+    NEO4J = "neo4j"
+    INFLUXDB = "influxdb"
+    ELASTICSEARCH = "elasticsearch"
 
 
 # Database container images
@@ -43,6 +49,12 @@ DATABASE_IMAGES = {
     DatabaseType.MARIADB: "docker.io/library/mariadb:11",
     DatabaseType.MONGODB: "docker.io/library/mongo:7",
     DatabaseType.REDIS: "docker.io/library/redis:7-alpine",
+    DatabaseType.SQLSERVER: "mcr.microsoft.com/mssql/server:2022-latest",
+    DatabaseType.CASSANDRA: "docker.io/library/cassandra:5",
+    DatabaseType.COUCHDB: "docker.io/library/couchdb:3",
+    DatabaseType.NEO4J: "docker.io/library/neo4j:5",
+    DatabaseType.INFLUXDB: "docker.io/library/influxdb:2",
+    DatabaseType.ELASTICSEARCH: "docker.io/library/elasticsearch:8.11.0",
 }
 
 # Database default ports
@@ -52,6 +64,12 @@ DATABASE_PORTS = {
     DatabaseType.MARIADB: 3306,
     DatabaseType.MONGODB: 27017,
     DatabaseType.REDIS: 6379,
+    DatabaseType.SQLSERVER: 1433,
+    DatabaseType.CASSANDRA: 9042,
+    DatabaseType.COUCHDB: 5984,
+    DatabaseType.NEO4J: 7687,
+    DatabaseType.INFLUXDB: 8086,
+    DatabaseType.ELASTICSEARCH: 9200,
 }
 
 
@@ -114,6 +132,18 @@ class DatabaseCredentials:
             return f"mongodb://{self.username}:{self.password}@{self.host}:{self.port}/{self.database}"
         elif self.database_type == DatabaseType.REDIS:
             return f"redis://:{self.password}@{self.host}:{self.port}/0"
+        elif self.database_type == DatabaseType.SQLSERVER:
+            return f"mssql://{self.username}:{self.password}@{self.host}:{self.port}/{self.database}"
+        elif self.database_type == DatabaseType.CASSANDRA:
+            return f"cassandra://{self.username}:{self.password}@{self.host}:{self.port}/{self.database}"
+        elif self.database_type == DatabaseType.COUCHDB:
+            return f"http://{self.username}:{self.password}@{self.host}:{self.port}"
+        elif self.database_type == DatabaseType.NEO4J:
+            return f"neo4j://{self.username}:{self.password}@{self.host}:{self.port}"
+        elif self.database_type == DatabaseType.INFLUXDB:
+            return f"http://{self.host}:{self.port}"
+        elif self.database_type == DatabaseType.ELASTICSEARCH:
+            return f"https://{self.username}:{self.password}@{self.host}:{self.port}"
         return ""
 
 
@@ -447,6 +477,50 @@ class ContainerService:
             # Redis doesn't support _FILE env vars, handled via command args later
             username = ""
             env_vars = []
+        elif db_type == DatabaseType.SQLSERVER:
+            if secrets_paths:
+                env_vars = [
+                    "-e", "ACCEPT_EULA=Y",
+                    "-e", "MSSQL_SA_PASSWORD_FILE=/secrets/root_password",
+                ]
+            else:
+                env_vars = [
+                    "-e", "ACCEPT_EULA=Y",
+                    "-e", f"MSSQL_SA_PASSWORD={password}",
+                ]
+            username = "sa"
+        elif db_type == DatabaseType.CASSANDRA:
+            env_vars = [
+                "-e", f"CASSANDRA_USER={username}",
+                "-e", f"CASSANDRA_PASSWORD={password}",
+            ]
+        elif db_type == DatabaseType.COUCHDB:
+            env_vars = [
+                "-e", f"COUCHDB_USER={username}",
+                "-e", f"COUCHDB_PASSWORD={password}",
+            ]
+        elif db_type == DatabaseType.NEO4J:
+            if secrets_paths:
+                env_vars = [
+                    "-e", f"NEO4J_AUTH={username}/$(cat /secrets/root_password)",
+                ]
+            else:
+                env_vars = [
+                    "-e", f"NEO4J_AUTH={username}/{password}",
+                ]
+        elif db_type == DatabaseType.INFLUXDB:
+            env_vars = [
+                "-e", f"INFLUXDB_DB={database_name}",
+                "-e", f"INFLUXDB_ADMIN_USER={username}",
+                "-e", f"INFLUXDB_ADMIN_PASSWORD={password}",
+            ]
+        elif db_type == DatabaseType.ELASTICSEARCH:
+            env_vars = [
+                "-e", "discovery.type=single-node",
+                "-e", f"ELASTIC_PASSWORD={password}",
+                "-e", "xpack.security.enabled=true",
+            ]
+            username = "elastic"
         
         # Build port binding based on external_access
         port_binding = (
@@ -469,6 +543,23 @@ class ContainerService:
                 "--cap-add=SETUID",
                 "--cap-add=CHOWN",  # Needed for file ownership changes
                 "--cap-add=DAC_OVERRIDE",  # Needed for file access
+            ])
+        
+        # SQL Server needs additional capabilities
+        if db_type == DatabaseType.SQLSERVER:
+            security_flags.extend([
+                "--cap-add=SETGID",
+                "--cap-add=SETUID",
+                "--cap-add=CHOWN",
+                "--cap-add=DAC_OVERRIDE",
+            ])
+        
+        # Elasticsearch needs vm.max_map_count increased (handled outside container)
+        # User must run: sysctl -w vm.max_map_count=262144
+        if db_type == DatabaseType.ELASTICSEARCH:
+            security_flags.extend([
+                "--cap-add=SETGID",
+                "--cap-add=SETUID",
             ])
         
         # Optional resource limits (for future SKU-based limits in Phase 6)
@@ -506,6 +597,27 @@ class ContainerService:
                 # Redis uses /data for persistence
                 volume_mounts = ["-v", f"{data_path}:/data:Z"]
                 # Redis config will be passed via command line args (Phase 4)
+            elif db_type == DatabaseType.SQLSERVER:
+                # SQL Server stores data in /var/opt/mssql
+                volume_mounts = ["-v", f"{data_path}:/var/opt/mssql:Z"]
+            elif db_type == DatabaseType.CASSANDRA:
+                # Cassandra stores data in /var/lib/cassandra
+                volume_mounts = ["-v", f"{data_path}:/var/lib/cassandra:Z"]
+            elif db_type == DatabaseType.COUCHDB:
+                # CouchDB stores data in /opt/couchdb/data
+                volume_mounts = ["-v", f"{data_path}:/opt/couchdb/data:Z"]
+            elif db_type == DatabaseType.NEO4J:
+                # Neo4j uses /data for database and /logs for logs
+                volume_mounts = [
+                    "-v", f"{data_path}:/data:Z",
+                    "-v", f"{config_path}:/logs:Z"
+                ]
+            elif db_type == DatabaseType.INFLUXDB:
+                # InfluxDB stores data in /var/lib/influxdb2
+                volume_mounts = ["-v", f"{data_path}:/var/lib/influxdb2:Z"]
+            elif db_type == DatabaseType.ELASTICSEARCH:
+                # Elasticsearch stores data in /usr/share/elasticsearch/data
+                volume_mounts = ["-v", f"{data_path}:/usr/share/elasticsearch/data:Z"]
             
             # Mount secrets directory read-only (Phase 5: Secrets Management)
             if secrets_paths:
