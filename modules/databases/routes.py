@@ -199,6 +199,37 @@ async def get_requirements():
     }
 
 
+@router.get("/system-info")
+async def get_system_info():
+    """
+    Get host system information (CPU cores, RAM).
+    Used to filter database SKUs that exceed system capacity.
+    """
+    import os
+    
+    # Get CPU count
+    cpu_cores = os.cpu_count() or 1
+    
+    # Get total RAM from /proc/meminfo (Linux)
+    total_memory_mb = 0
+    try:
+        with open('/proc/meminfo', 'r') as f:
+            for line in f:
+                if line.startswith('MemTotal:'):
+                    # MemTotal is in KB, convert to MB
+                    total_memory_kb = int(line.split()[1])
+                    total_memory_mb = total_memory_kb // 1024
+                    break
+    except Exception:
+        # Fallback to a conservative estimate if we can't read meminfo
+        total_memory_mb = 4096  # 4GB default
+    
+    return {
+        "cpu_cores": cpu_cores,
+        "total_memory_mb": total_memory_mb,
+    }
+
+
 @router.get("/podman/status", response_model=PodmanStatus)
 async def get_podman_status():
     """

@@ -1,6 +1,6 @@
 {
   "name": "databases",
-  "display_name": "Databases",
+  "display_name": "Database Management",
   "version": "1.0.0",
   "description": "Database management and exploration tools for Flux",
   "author": "Flux Team",

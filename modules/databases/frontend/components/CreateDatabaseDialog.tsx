@@ -58,6 +58,17 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
   const [formState, setFormState] = useState<FormState>(INITIAL_FORM_STATE);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
+  // Fetch system info for SKU filtering
+  const { data: systemInfo } = useQuery({
+    queryKey: ['databases', 'system-info'],
+    queryFn: async () => {
+      const response = await api.get('/modules/databases/system-info');
+      return response.data;
+    },
+    enabled: open,
+    staleTime: 60000,
+  });
+
   // Fetch available VNets
   const { data: vnetsData } = useQuery({
     queryKey: ['networking', 'vnets'],
@@ -70,6 +81,14 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
   });
 
   const availableVNets = vnetsData?.vnets?.filter((v: any) => v.status === 'active') || [];
+
+  // Helper to check if SKU exceeds system capacity
+  const isSkuUnavailable = (sku: any) => {
+    if (!systemInfo || sku.series === 'custom') return false;
+    const memoryGb = sku.memoryMb / 1024;
+    const systemMemoryGb = systemInfo.total_memory_mb / 1024;
+    return sku.cpus > systemInfo.cpu_cores || memoryGb > systemMemoryGb;
+  };
 
   // Reset form when dialog opens
   useEffect(() => {
@@ -257,10 +276,10 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                     <React.Fragment key={sku.id}>
                       {idx === 0 && (
                         <div className="px-2 py-1 border-b">
-                          <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Burstable</span>
+                          <span className="text-[8px] text-muted-foreground uppercase tracking-wide">Burstable</span>
                         </div>
                       )}
-                      <SelectItem value={sku.id}>
+                      <SelectItem value={sku.id} disabled={isSkuUnavailable(sku)}>
                         <div className="flex items-center gap-2">
                           <span className="font-semibold text-sm">{sku.name}</span>
                           <span className="text-xs text-muted-foreground">
@@ -273,10 +292,10 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                   
                   {/* D-series */}
                   <div className="px-2 py-1 border-b">
-                    <span className="text-[10px] text-muted-foreground uppercase tracking-wide">General Purpose</span>
+                    <span className="text-[8px] text-muted-foreground uppercase tracking-wide">General Purpose</span>
                   </div>
                   {DATABASE_SKUS.filter(sku => sku.series === 'general').map((sku) => (
-                    <SelectItem key={sku.id} value={sku.id}>
+                    <SelectItem key={sku.id} value={sku.id} disabled={isSkuUnavailable(sku)}>
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-sm">{sku.name}</span>
                         <span className="text-xs text-muted-foreground">
@@ -293,10 +312,10 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                   
                   {/* E-series */}
                   <div className="px-2 py-1 border-b">
-                    <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Memory Optimized</span>
+                    <span className="text-[8px] text-muted-foreground uppercase tracking-wide">Memory Optimized</span>
                   </div>
                   {DATABASE_SKUS.filter(sku => sku.series === 'memory').map((sku) => (
-                    <SelectItem key={sku.id} value={sku.id}>
+                    <SelectItem key={sku.id} value={sku.id} disabled={isSkuUnavailable(sku)}>
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-sm">{sku.name}</span>
                         <span className="text-xs text-muted-foreground">
@@ -308,10 +327,10 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                   
                   {/* F-series */}
                   <div className="px-2 py-1 border-b">
-                    <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Compute Optimized</span>
+                    <span className="text-[8px] text-muted-foreground uppercase tracking-wide">Compute Optimized</span>
                   </div>
                   {DATABASE_SKUS.filter(sku => sku.series === 'compute').map((sku) => (
-                    <SelectItem key={sku.id} value={sku.id}>
+                    <SelectItem key={sku.id} value={sku.id} disabled={isSkuUnavailable(sku)}>
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-sm">{sku.name}</span>
                         <span className="text-xs text-muted-foreground">
@@ -323,7 +342,7 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                   
                   {/* Custom */}
                   <div className="px-2 py-1 border-b">
-                    <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Custom</span>
+                    <span className="text-[8px] text-muted-foreground uppercase tracking-wide">Custom</span>
                   </div>
                   {DATABASE_SKUS.filter(sku => sku.series === 'custom').map((sku) => (
                     <SelectItem key={sku.id} value={sku.id}>

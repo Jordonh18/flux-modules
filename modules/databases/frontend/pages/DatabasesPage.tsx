@@ -151,21 +151,49 @@ function DatabasesPageContent() {
 
   const createDatabaseMutation = useMutation({
     mutationFn: databasesApi.createDatabase,
-    onMutate: () => {
+    onMutate: async (newDatabase) => {
       // Close modal immediately
       setIsCreateModalOpen(false);
       
-      toast.info('Creating database... This may take a few minutes if the image needs to be downloaded.', {
-        duration: 10000,
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['databases', 'list'] });
+      
+      // Snapshot previous value
+      const previousDatabases = queryClient.getQueryData<DatabaseInfo[]>(['databases', 'list']);
+      
+      // Optimistically add the database with "creating" status
+      queryClient.setQueryData<DatabaseInfo[]>(['databases', 'list'], (old) => {
+        if (!old) return old;
+        
+        // Create temporary database entry
+        const tempDatabase: DatabaseInfo = {
+          id: Date.now(), // Temporary ID
+          name: newDatabase.name || `${newDatabase.type}-db`,
+          type: newDatabase.type,
+          status: 'creating',
+          host: 'localhost',
+          port: 0,
+          database: newDatabase.database_name,
+          username: 'creating...',
+          password: '',
+          created_at: new Date().toISOString(),
+        };
+        
+        return [tempDatabase, ...old];
       });
+      
+      // Return context for rollback
+      return { previousDatabases };
     },
-    onSuccess: (data) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['databases', 'list'] });
-      toast.success(data.message || 'Database created successfully');
     },
-    onError: (err: any) => {
+    onError: (err: any, _variables, context) => {
+      // Rollback on error
+      if (context?.previousDatabases) {
+        queryClient.setQueryData(['databases', 'list'], context.previousDatabases);
+      }
       toast.error(err.response?.data?.detail || err.message || 'Failed to create database');
-      queryClient.invalidateQueries({ queryKey: ['databases', 'list'] });
     },
   });
 
