@@ -315,6 +315,8 @@ class ContainerService:
         enable_volumes: bool = True,  # Enable persistent storage by default
         tls_cert_path: Optional[str] = None,
         tls_key_path: Optional[str] = None,
+        vnet_bridge: Optional[str] = None,  # VNet bridge name (e.g., 'flux-vn-production')
+        vnet_ip: Optional[str] = None,      # Assigned VNet IP address
     ) -> DatabaseCredentials:
         """
         Create a new database container with auto-generated or provided credentials.
@@ -326,12 +328,14 @@ class ContainerService:
             container_name: Full container name (overrides name if provided)
             username: Database username (auto-generated if not provided)
             password: Database password (auto-generated if not provided)
-            host_port: Host port to bind (auto-selected if not provided)
+            host_port: Host port to bind (auto-selected if not provided, ignored if vnet_bridge is set)
             external_access: Allow external network access (default: False, localhost only)
             memory_limit_mb: Memory limit in MB (optional, for SKU-based limits)
             cpu_limit: CPU limit as decimal (e.g., 1.5 for 1.5 CPUs, optional)
             sku: SKU tier identifier (e.g., 'b2', 'd4', 'e8', 'f16') - determines series behavior
             enable_volumes: Enable persistent storage volumes (default: True)
+            vnet_bridge: VNet bridge name to connect container to (e.g., 'flux-vn-production')
+            vnet_ip: Static IP to assign on the VNet (requires vnet_bridge)
         
         Returns:
             DatabaseCredentials with connection information and volume_path
@@ -456,12 +460,23 @@ class ContainerService:
             username = ""
             env_vars = []
         
-        # Build port binding based on external_access
-        port_binding = (
-            f"0.0.0.0:{host_port}:{default_port}" 
-            if external_access 
-            else f"127.0.0.1:{host_port}:{default_port}"
-        )
+        # Build network configuration
+        # If VNet is provided, use bridge networking with static IP
+        # Otherwise fall back to port mapping (legacy behavior)
+        network_flags = []
+        if vnet_bridge and vnet_ip:
+            network_flags = [
+                "--network", vnet_bridge,
+                "--ip", vnet_ip,
+            ]
+        else:
+            # Traditional port mapping
+            port_binding = (
+                f"0.0.0.0:{host_port}:{default_port}" 
+                if external_access 
+                else f"127.0.0.1:{host_port}:{default_port}"
+            )
+            network_flags = ["-p", port_binding]
         
         # Security flags for container hardening
         security_flags = [
@@ -593,9 +608,8 @@ class ContainerService:
         cmd = [
             "podman", "run", "-d",
             "--name", container_name,
-            "-p", port_binding,
             "--restart", "unless-stopped",
-        ] + security_flags + volume_mounts + env_vars + [image] + tls_args
+        ] + network_flags + security_flags + volume_mounts + env_vars + [image] + tls_args
         
         # Handle Redis differently (requirepass is a command arg, not env)
         if db_type == DatabaseType.REDIS:
@@ -605,9 +619,8 @@ class ContainerService:
                 cmd = [
                     "podman", "run", "-d",
                     "--name", container_name,
-                    "-p", port_binding,
                     "--restart", "unless-stopped",
-                ] + security_flags + volume_mounts + [
+                ] + network_flags + security_flags + volume_mounts + [
                     image,
                     "sh", "-c", "redis-server --requirepass $(cat /secrets/root_password)",
                 ]
@@ -616,9 +629,8 @@ class ContainerService:
                 cmd = [
                     "podman", "run", "-d",
                     "--name", container_name,
-                    "-p", port_binding,
                     "--restart", "unless-stopped",
-                ] + security_flags + volume_mounts + [
+                ] + network_flags + security_flags + volume_mounts + [
                     image,
                     "redis-server", "--requirepass", password,
                 ]
@@ -650,12 +662,16 @@ class ContainerService:
             
             container_id = stdout.decode().strip()[:12]
             
+            # Connection info differs based on network mode
+            connection_host = vnet_ip if vnet_ip else "localhost"
+            connection_port = default_port if vnet_ip else host_port
+            
             return DatabaseCredentials(
                 database_type=db_type,
                 container_name=container_name,
                 container_id=container_id,
-                host="localhost",
-                port=host_port,
+                host=connection_host,
+                port=connection_port,
                 database=database_name if db_type != DatabaseType.REDIS else "0",
                 username=username,
                 password=password,

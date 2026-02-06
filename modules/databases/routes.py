@@ -16,6 +16,11 @@ from module_sdk import (
     BaseModel,
     Optional,
     List,
+    # VNet hooks
+    allocate_vnet_ip,
+    release_vnet_ip,
+    get_module_allocations,
+    list_available_vnets,
 )
 from database import get_db_context
 from enum import Enum
@@ -105,6 +110,7 @@ class CreateDatabaseRequest(BaseModel):
     tls_enabled: bool = False
     tls_cert: Optional[str] = None  # Base64 encoded certificate
     tls_key: Optional[str] = None   # Base64 encoded key
+    vnet_name: Optional[str] = None  # VNet to connect to (optional)
 
 
 class DatabaseInfo(BaseModel):
@@ -399,6 +405,35 @@ async def create_database(
     password = ContainerService.generate_password()
     host_port = ContainerService.find_available_port(exclude_ports=used_ports)
     
+    # Try to allocate a VNet IP for this database (optional - falls back to port mapping)
+    vnet_ip = None
+    vnet_id = None
+    vnet_bridge = None
+    if allocate_vnet_ip is not None and request.vnet_name:
+        try:
+            # Use the user-selected VNet
+            allocation = await allocate_vnet_ip(
+                vnet_name=request.vnet_name,
+                module_name="databases",
+                resource_id=container_name,
+                label=f"{db_type.value} - {request.name or container_name}",
+            )
+            if allocation:
+                vnet_ip = allocation.get("ip_address")
+                vnet_id = allocation.get("vnet_id")
+                # Get VNet details to find bridge name
+                vnets = await list_available_vnets()
+                selected_vnet = next((v for v in vnets if v["name"] == request.vnet_name), None)
+                if selected_vnet:
+                    vnet_bridge = selected_vnet.get("bridge_name")
+        except Exception as vnet_err:
+            # VNet allocation is best-effort; log and continue with port mapping
+            print(f"VNet allocation failed: {vnet_err}")
+    
+    # Connection host is VNet IP if allocated, otherwise localhost
+    connection_host = vnet_ip if vnet_ip else "localhost"
+    connection_port = host_port  # Port mapping still used as fallback/alongside
+    
     try:
         # Insert database record immediately with 'creating' status and config
         result = await db.execute(text("""
@@ -412,7 +447,7 @@ async def create_database(
             "container_id": None,  # Will be updated when container is created
             "container_name": container_name,
             "database_type": db_type.value,
-            "host": "localhost",
+            "host": connection_host,
             "port": host_port,
             "database_name": request.database_name,
             "username": username,
@@ -476,6 +511,8 @@ async def create_database(
                     sku=request.sku,
                     tls_cert_path=tls_cert_path,
                     tls_key_path=tls_key_path,
+                    vnet_bridge=vnet_bridge,
+                    vnet_ip=vnet_ip,
                 )
                 
                 # Update record with container ID and success status
@@ -483,11 +520,15 @@ async def create_database(
                     async with get_db_context() as background_db:
                         await background_db.execute(text("""
                             UPDATE module_databases 
-                            SET container_id = :container_id, volume_path = :volume_path, status = 'running', error_message = NULL, updated_at = datetime('now')
+                            SET container_id = :container_id, volume_path = :volume_path, 
+                                host = :host, port = :port,
+                                status = 'running', error_message = NULL, updated_at = datetime('now')
                             WHERE id = :id
                         """), {
                             "container_id": credentials.container_id,
                             "volume_path": credentials.volume_path,
+                            "host": credentials.host,
+                            "port": credentials.port,
                             "id": db_id
                         })
                 except Exception as db_error:
@@ -520,7 +561,7 @@ async def create_database(
                 "id": db_id,
                 "name": container_name,
                 "type": db_type.value,
-                "host": "localhost",
+                "host": connection_host,
                 "port": host_port,
                 "database": request.database_name,
                 "username": username,
@@ -532,6 +573,8 @@ async def create_database(
                 "storage_limit_gb": storage_limit_gb,
                 "external_access": request.external_access,
                 "tls_enabled": request.tls_enabled,
+                "vnet_ip": vnet_ip,
+                "vnet_bridge": vnet_bridge,
             }
         }
         
@@ -658,6 +701,13 @@ async def delete_database(
         VolumeService.cleanup_volumes(row.container_name)
     except Exception as vol_error:
         print(f"Warning: Failed to cleanup volumes for {row.container_name}: {vol_error}")
+    
+    # Release VNet IP allocation if available
+    if release_vnet_ip is not None:
+        try:
+            await release_vnet_ip(module_name="databases", resource_id=row.container_name)
+        except Exception as vnet_err:
+            print(f"Warning: Failed to release VNet IP for {row.container_name}: {vnet_err}")
     
     # Remove from database
     await db.execute(text("DELETE FROM module_databases WHERE id = :id"), {"id": database_id})

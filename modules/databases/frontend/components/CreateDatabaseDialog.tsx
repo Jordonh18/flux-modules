@@ -6,8 +6,9 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Slider } from '@/components/ui/slider';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { ChevronDown, Loader2, AlertTriangle } from 'lucide-react';
+import { Loader2, AlertTriangle } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '@/lib/api';
 import { DATABASE_SKUS } from '../types/database-skus';
 
 // Copy of DATABASE_TYPES from DatabasesPage.tsx
@@ -38,6 +39,7 @@ interface FormState {
   tlsEnabled: boolean;
   tlsCert?: string;
   tlsKey?: string;
+  vnetName?: string;
 }
 
 const INITIAL_FORM_STATE: FormState = {
@@ -54,15 +56,26 @@ const INITIAL_FORM_STATE: FormState = {
 
 export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmitting = false }: CreateDatabaseDialogProps) {
   const [formState, setFormState] = useState<FormState>(INITIAL_FORM_STATE);
-  const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // Fetch available VNets
+  const { data: vnetsData } = useQuery({
+    queryKey: ['networking', 'vnets'],
+    queryFn: async () => {
+      const response = await api.get('/networking/vnets');
+      return response.data;
+    },
+    enabled: open,
+    refetchInterval: 30000,
+  });
+
+  const availableVNets = vnetsData?.vnets?.filter((v: any) => v.status === 'active') || [];
 
   // Reset form when dialog opens
   useEffect(() => {
     if (open) {
       setFormState(INITIAL_FORM_STATE);
       setErrors({});
-      setIsAdvancedOpen(false);
     }
   }, [open]);
 
@@ -137,6 +150,7 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
             tls_enabled: formState.tlsEnabled,
             tls_cert: formState.tlsCert,
             tls_key: formState.tlsKey,
+            vnet_name: formState.vnetName || undefined,
         };
         
         onSubmit(payload);
@@ -198,6 +212,41 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
               className={errors.databaseName ? "border-red-500" : ""}
             />
             {errors.databaseName && <p className="text-xs text-red-500">{errors.databaseName}</p>}
+          </div>
+
+          {/* Virtual Network */}
+          <div className="space-y-2">
+            <Label htmlFor="vnet">Virtual Network (Optional)</Label>
+            <Select
+              value={formState.vnetName || "none"}
+              onValueChange={(value) => setFormState({ ...formState, vnetName: value === "none" ? undefined : value })}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select VNet or use port mapping" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground">No VNet (port mapping)</span>
+                  </div>
+                </SelectItem>
+                {availableVNets.map((vnet: any) => (
+                  <SelectItem key={vnet.id} value={vnet.name}>
+                    <div className="flex flex-col">
+                      <span className="font-medium">{vnet.name}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {vnet.subnet} • {vnet.available_ips} IPs available
+                      </span>
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {formState.vnetName 
+                ? `Database will receive an IP on the ${formState.vnetName} network`
+                : "Database will use random port mapping on localhost"}
+            </p>
           </div>
 
           {/* Compute + Storage Selection */}
@@ -373,14 +422,8 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
             </div>
           )}
 
-          {/* Advanced Options */}
-          <Collapsible open={isAdvancedOpen} onOpenChange={setIsAdvancedOpen}>
-            <CollapsibleTrigger className="flex items-center w-full text-sm font-medium hover:underline">
-              <ChevronDown className={`w-4 h-4 mr-2 transition-transform ${isAdvancedOpen ? '' : '-rotate-90'}`} />
-              Advanced Options
-            </CollapsibleTrigger>
-            
-            <CollapsibleContent className="mt-4 space-y-3">
+          {/* Networking & Security */}
+          <div className="space-y-4 pt-2">
               {/* External Access */}
               <div className="flex items-center justify-between p-3 rounded-md border bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/50">
                 <div className="flex items-center gap-2">
@@ -437,8 +480,7 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                   </div>
                 )}
               </div>
-            </CollapsibleContent>
-          </Collapsible>
+          </div>
 
           <DialogFooter>
             <Button
