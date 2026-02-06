@@ -1,11 +1,11 @@
 /**
  * Database Detail Page
  * 
- * Azure-level database management with tabs for:
+ * Azure-style database management with tabs for:
  * - Overview: Connection info, stats, and status
- * - Logs: Real-time container logs
+ * - Logs: Real-time database logs
  * - Backups: Backup/restore management
- * - Settings: Container configuration
+ * - Settings: Database configuration
  */
 
 import { memo, useState, useEffect, useRef } from 'react';
@@ -60,7 +60,6 @@ import {
 // Types
 interface DatabaseInfo {
   id: number;
-  container_id: string;
   name: string;
   type: string;
   status: string;
@@ -154,6 +153,8 @@ const detailApi = {
     api.post(`/modules/databases/databases/${id}/stop`).then(r => r.data),
   deleteDatabase: (id: number) => 
     api.delete(`/modules/databases/databases/${id}`).then(r => r.data),
+  restartDatabase: (id: number) => 
+    api.post(`/modules/databases/databases/${id}/restart`).then(r => r.data),
   getTables: (id: number) => 
     api.get<{ tables: string[] }>(`/modules/databases/databases/${id}/tables`).then(r => r.data),
   getTableSchema: (id: number, tableName: string) => 
@@ -192,10 +193,10 @@ function DatabaseDetailPageContent() {
     queryKey: ['databases', 'detail', databaseId],
     queryFn: () => detailApi.getDatabase(databaseId),
     enabled: databaseId > 0,
-    refetchInterval: 10000,
+    refetchInterval: 3000, // Refresh every 3s for real-time status
   });
 
-  useDocumentTitle(database?.name ? `${database.name} - Databases` : 'Database Details');
+  useDocumentTitle(database?.name ? ` Database - ${database.name}` : 'Database Details');
 
   const { data: stats, refetch: refetchStats } = useQuery({
     queryKey: ['databases', 'stats', databaseId],
@@ -253,20 +254,58 @@ function DatabaseDetailPageContent() {
   // Mutations
   const startMutation = useMutation({
     mutationFn: () => detailApi.startDatabase(databaseId),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ['databases', 'detail', databaseId] });
+      const previousDatabase = queryClient.getQueryData<DatabaseInfo>(['databases', 'detail', databaseId]);
+      
+      queryClient.setQueryData<DatabaseInfo>(['databases', 'detail', databaseId], (old) => {
+        if (!old) return old;
+        return { ...old, status: 'starting' };
+      });
+      
+      toast.info('Starting database...');
+      return { previousDatabase };
+    },
+    onError: (_err, _variables, context) => {
+      if (context?.previousDatabase) {
+        queryClient.setQueryData(['databases', 'detail', databaseId], context.previousDatabase);
+      }
+      toast.error('Failed to start database');
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['databases'] });
       toast.success('Database started');
     },
-    onError: () => toast.error('Failed to start database'),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['databases'] });
+    },
   });
 
   const stopMutation = useMutation({
     mutationFn: () => detailApi.stopDatabase(databaseId),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ['databases', 'detail', databaseId] });
+      const previousDatabase = queryClient.getQueryData<DatabaseInfo>(['databases', 'detail', databaseId]);
+      
+      queryClient.setQueryData<DatabaseInfo>(['databases', 'detail', databaseId], (old) => {
+        if (!old) return old;
+        return { ...old, status: 'stopping' };
+      });
+      
+      toast.info('Stopping database...');
+      return { previousDatabase };
+    },
+    onError: (_err, _variables, context) => {
+      if (context?.previousDatabase) {
+        queryClient.setQueryData(['databases', 'detail', databaseId], context.previousDatabase);
+      }
+      toast.error('Failed to stop database');
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['databases'] });
       toast.success('Database stopped');
     },
-    onError: () => toast.error('Failed to stop database'),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['databases'] });
+    },
   });
 
   const deleteMutation = useMutation({
@@ -276,6 +315,42 @@ function DatabaseDetailPageContent() {
       navigate('/modules/databases');
     },
     onError: () => toast.error('Failed to delete database'),
+  });
+
+  const restartMutation = useMutation({
+    mutationFn: () => detailApi.restartDatabase(databaseId),
+    onMutate: async () => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['databases', 'detail', databaseId] });
+      
+      // Snapshot previous value
+      const previousDatabase = queryClient.getQueryData<DatabaseInfo>(['databases', 'detail', databaseId]);
+      
+      // Optimistically update to "restarting" status
+      queryClient.setQueryData<DatabaseInfo>(['databases', 'detail', databaseId], (old) => {
+        if (!old) return old;
+        return { ...old, status: 'restarting' };
+      });
+      
+      toast.info('Restarting database...');
+      
+      // Return context for rollback
+      return { previousDatabase };
+    },
+    onError: (error: any, _variables, context) => {
+      // Rollback on error
+      if (context?.previousDatabase) {
+        queryClient.setQueryData(['databases', 'detail', databaseId], context.previousDatabase);
+      }
+      toast.error(error.response?.data?.detail || 'Failed to restart database');
+    },
+    onSuccess: () => {
+      toast.success('Database restarted');
+    },
+    onSettled: () => {
+      // Refetch to ensure we have accurate data
+      queryClient.invalidateQueries({ queryKey: ['databases'] });
+    },
   });
 
   const backupMutation = useMutation({
@@ -304,6 +379,28 @@ function DatabaseDetailPageContent() {
     },
     onError: () => toast.error('Failed to delete backup'),
   });
+
+  const getStatusBadgeClass = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'running':
+        return 'status-badge-running';
+      case 'stopped':
+      case 'exited':
+        return 'status-badge-stopped';
+      case 'creating':
+        return 'status-badge-creating';
+      case 'starting':
+        return 'status-badge-starting';
+      case 'stopping':
+        return 'status-badge-stopping';
+      case 'restarting':
+        return 'status-badge-restarting';
+      case 'error':
+        return 'status-badge-error';
+      default:
+        return 'status-badge-default';
+    }
+  };
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -348,23 +445,28 @@ function DatabaseDetailPageContent() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Badge 
-            variant={isRunning ? 'default' : 'secondary'}
+          <span
             className={cn(
-              "capitalize",
-              isRunning && "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20"
+              "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium capitalize border",
+              getStatusBadgeClass(database.status)
             )}
           >
-            {database.status === 'creating' && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+            {(database.status === 'creating' || database.status === 'restarting' || database.status === 'starting' || database.status === 'stopping') && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
             {database.status}
-          </Badge>
-          {isRunning ? (
-            <Button variant="outline" size="sm" onClick={() => stopMutation.mutate()} disabled={stopMutation.isPending}>
-              <Square className="mr-2 h-4 w-4" />
-              Stop
-            </Button>
-          ) : database.status !== 'creating' && (
-            <Button variant="outline" size="sm" onClick={() => startMutation.mutate()} disabled={startMutation.isPending}>
+          </span>
+          {(database.status === 'running' || database.status === 'restarting' || database.status === 'stopping') ? (
+            <>
+              <Button variant="outline" size="sm" onClick={() => restartMutation.mutate()} disabled={restartMutation.isPending || database.status === 'restarting' || database.status === 'stopping'}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Restart
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => stopMutation.mutate()} disabled={stopMutation.isPending || database.status === 'restarting' || database.status === 'stopping'}>
+                <Square className="mr-2 h-4 w-4" />
+                Stop
+              </Button>
+            </>
+          ) : database.status === 'stopped' && (
+            <Button variant="outline" size="sm" onClick={() => startMutation.mutate()} disabled={startMutation.isPending || database.status === 'starting'}>
               <Play className="mr-2 h-4 w-4" />
               Start
             </Button>
@@ -589,10 +691,10 @@ function DatabaseDetailPageContent() {
 
         {/* Logs Tab */}
         <TabsContent value="logs" className="space-y-4">
-          <Card>
+          <Card className="w-full">
             <CardHeader>
               <CardTitle className="text-lg flex items-center justify-between">
-                Container Logs
+                Database Logs
                 <Button variant="outline" size="sm" onClick={() => refetchLogs()} disabled={logsLoading}>
                   {logsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                   <span className="ml-2">Refresh</span>
@@ -601,14 +703,16 @@ function DatabaseDetailPageContent() {
               <CardDescription>Last 500 lines, auto-refreshes every 2 seconds</CardDescription>
             </CardHeader>
             <CardContent>
-              <ScrollArea className="h-[500px] w-full">
-                <div className="bg-black p-4 rounded border">
-                  <pre className="text-xs text-green-400 font-mono whitespace-pre-wrap break-all">
-                    {logsData?.logs || 'No logs available'}
+              <div className="overflow-hidden min-w-0 rounded-md border bg-muted">
+                <ScrollArea className="max-h-[70vh] w-full">
+                  <div className="p-4">
+                    <pre className="text-xs text-foreground font-mono whitespace-pre-wrap break-all leading-relaxed">
+                      {logsData?.logs || 'No logs available'}
+                    </pre>
                     <div ref={logsEndRef} />
-                  </pre>
-                </div>
-              </ScrollArea>
+                  </div>
+                </ScrollArea>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -869,7 +973,7 @@ function DatabaseDetailPageContent() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Database</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete "{database.name}"? This will stop the container and permanently delete all data. This action cannot be undone.
+              Are you sure you want to delete "{database.name}"? This will permanently delete all data. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

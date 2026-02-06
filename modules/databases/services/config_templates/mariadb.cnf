@@ -1,0 +1,15 @@
+[mysqld]
+# Security settings
+host_cache_size = 0
+skip-name-resolve = 1
+
+# Prevent pid-file warnings - use data directory instead of /var/run/mysqld
+pid-file = /var/lib/mysql/mysqld.pid
+
+# Performance tuning for containerized environment
+innodb_buffer_pool_size = 128M
+innodb_log_file_size = 64M
+max_connections = 100
+
+# Logging
+log_error_verbosity = 2

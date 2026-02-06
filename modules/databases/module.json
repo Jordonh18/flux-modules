@@ -14,14 +14,14 @@
     {
       "name": "databases:read",
       "display_name": "View Databases",
-      "description": "View database containers and their status",
+      "description": "View databases and their status",
       "resource": "databases",
       "action": "read"
     },
     {
       "name": "databases:write",
       "display_name": "Manage Databases",
-      "description": "Create, start, stop, and delete database containers",
+      "description": "Create, start, stop, and delete databases",
       "resource": "databases",
       "action": "write"
     }

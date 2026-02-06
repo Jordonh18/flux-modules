@@ -14,6 +14,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
+# Import volume service for persistent storage
+from .volume_service import VolumeService
+
 
 class ContainerStatus(str, Enum):
     """Container status states"""
@@ -84,6 +87,7 @@ class DatabaseCredentials:
     database: str
     username: str
     password: str
+    volume_path: Optional[str] = None  # Base path for persistent volumes
     
     def to_dict(self) -> dict:
         return {
@@ -96,6 +100,7 @@ class DatabaseCredentials:
             "username": self.username,
             "password": self.password,
             "connection_string": self.connection_string,
+            "volume_path": self.volume_path,
         }
     
     @property
@@ -302,10 +307,39 @@ class ContainerService:
         container_name: Optional[str] = None,
         username: Optional[str] = None,
         password: Optional[str] = None,
-        host_port: Optional[int] = None
+        host_port: Optional[int] = None,
+        external_access: bool = False,
+        memory_limit_mb: Optional[int] = None,
+        cpu_limit: Optional[float] = None,
+        enable_volumes: bool = True,  # Enable persistent storage by default
+        tls_cert_path: Optional[str] = None,
+        tls_key_path: Optional[str] = None,
     ) -> DatabaseCredentials:
         """
         Create a new database container with auto-generated or provided credentials.
+        
+        Args:
+            db_type: Type of database to create
+            name: Optional custom name for the container (will have unique suffix added)
+            database_name: Initial database/schema name (default: "app")
+            container_name: Full container name (overrides name if provided)
+            username: Database username (auto-generated if not provided)
+            password: Database password (auto-generated if not provided)
+            host_port: Host port to bind (auto-selected if not provided)
+            external_access: Allow external network access (default: False, localhost only)
+            memory_limit_mb: Memory limit in MB (optional, for future SKU-based limits)
+            cpu_limit: CPU limit as decimal (e.g., 1.5 for 1.5 CPUs, optional)
+            enable_volumes: Enable persistent storage volumes (default: True)
+        
+        Returns:
+            DatabaseCredentials with connection information and volume_path
+        
+        Security:
+            - Containers run with dropped capabilities (--cap-drop=all)
+            - Privilege escalation prevented (--security-opt=no-new-privileges)
+            - Process limits enforced (--pids-limit=100)
+            - Network access restricted to localhost by default
+            - Persistent volumes use SELinux :Z labels for rootless Podman
         """
         # Use provided values or generate new ones
         if not container_name:
@@ -328,56 +362,224 @@ class ContainerService:
         if not host_port:
             host_port = ContainerService.find_available_port()
         
+        # Create persistent volumes if enabled
+        volume_paths = None
+        config_file_path = None
+        secrets_paths = None
+        if enable_volumes:
+            try:
+                volume_paths = VolumeService.create_volumes(container_name)
+                # Copy config template after creating volumes (Phase 4)
+                config_file_path = VolumeService.copy_config_template(container_name, db_type)
+                
+                # Create secrets files (Phase 5: Secrets Management)
+                # Generate separate root password for databases that support it
+                root_password = ContainerService.generate_password()
+                # For Redis, we'll use the user password as the only password
+                user_password = password if db_type != DatabaseType.REDIS else None
+                secrets_paths = VolumeService.create_secrets(
+                    container_name, 
+                    root_password=root_password,
+                    user_password=user_password
+                )
+            except Exception as e:
+                # Log error but continue without volumes (fallback to ephemeral storage)
+                print(f"Warning: Failed to create volumes for {container_name}: {e}")
+                volume_paths = None
+                config_file_path = None
+                secrets_paths = None
+        
         # Get default internal port and image
         default_port = DATABASE_PORTS[db_type]
         image = DATABASE_IMAGES[db_type]
         
         # Build container command based on database type
+        # Phase 5: Use _FILE env vars for secrets instead of plaintext passwords
         env_vars = []
         if db_type == DatabaseType.POSTGRESQL:
-            env_vars = [
-                "-e", f"POSTGRES_USER={username}",
-                "-e", f"POSTGRES_PASSWORD={password}",
-                "-e", f"POSTGRES_DB={database_name}",
-            ]
+            if secrets_paths:
+                # Use secrets files to prevent password exposure in 'podman inspect'
+                env_vars = [
+                    "-e", f"POSTGRES_USER={username}",
+                    "-e", "POSTGRES_PASSWORD_FILE=/secrets/user_password",
+                    "-e", f"POSTGRES_DB={database_name}",
+                ]
+            else:
+                # Fallback to plaintext for ephemeral containers without volumes
+                env_vars = [
+                    "-e", f"POSTGRES_USER={username}",
+                    "-e", f"POSTGRES_PASSWORD={password}",
+                    "-e", f"POSTGRES_DB={database_name}",
+                ]
         elif db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB):
-            env_vars = [
-                "-e", f"MYSQL_ROOT_PASSWORD={ContainerService.generate_password()}",  # Separate root password
-                "-e", f"MYSQL_USER={username}",
-                "-e", f"MYSQL_PASSWORD={password}",
-                "-e", f"MYSQL_DATABASE={database_name}",
-            ]
+            if secrets_paths:
+                # Use secrets files to prevent password exposure in 'podman inspect'
+                env_vars = [
+                    "-e", "MYSQL_ROOT_PASSWORD_FILE=/secrets/root_password",
+                    "-e", f"MYSQL_USER={username}",
+                    "-e", "MYSQL_PASSWORD_FILE=/secrets/user_password",
+                    "-e", f"MYSQL_DATABASE={database_name}",
+                ]
+            else:
+                # Fallback to plaintext for ephemeral containers without volumes
+                env_vars = [
+                    "-e", f"MYSQL_ROOT_PASSWORD={ContainerService.generate_password()}",
+                    "-e", f"MYSQL_USER={username}",
+                    "-e", f"MYSQL_PASSWORD={password}",
+                    "-e", f"MYSQL_DATABASE={database_name}",
+                ]
         elif db_type == DatabaseType.MONGODB:
-            env_vars = [
-                "-e", f"MONGO_INITDB_ROOT_USERNAME={username}",
-                "-e", f"MONGO_INITDB_ROOT_PASSWORD={password}",
-                "-e", f"MONGO_INITDB_DATABASE={database_name}",
-            ]
+            if secrets_paths:
+                # Use secrets files to prevent password exposure in 'podman inspect'
+                env_vars = [
+                    "-e", f"MONGO_INITDB_ROOT_USERNAME={username}",
+                    "-e", "MONGO_INITDB_ROOT_PASSWORD_FILE=/secrets/root_password",
+                    "-e", f"MONGO_INITDB_DATABASE={database_name}",
+                ]
+            else:
+                # Fallback to plaintext for ephemeral containers without volumes
+                env_vars = [
+                    "-e", f"MONGO_INITDB_ROOT_USERNAME={username}",
+                    "-e", f"MONGO_INITDB_ROOT_PASSWORD={password}",
+                    "-e", f"MONGO_INITDB_DATABASE={database_name}",
+                ]
         elif db_type == DatabaseType.REDIS:
-            # Redis uses password only
+            # Redis doesn't support _FILE env vars, handled via command args later
             username = ""
-            env_vars = [
-                "--requirepass", password,
-            ]
+            env_vars = []
         
-        # Create container
+        # Build port binding based on external_access
+        port_binding = (
+            f"0.0.0.0:{host_port}:{default_port}" 
+            if external_access 
+            else f"127.0.0.1:{host_port}:{default_port}"
+        )
+        
+        # Security flags for container hardening
+        security_flags = [
+            "--cap-drop=all",                    # Drop all Linux capabilities (least privilege)
+            "--security-opt=no-new-privileges",  # Prevent privilege escalation
+            "--pids-limit=100",                  # Prevent fork bombs
+        ]
+        
+        # MySQL/MariaDB/PostgreSQL need capabilities to switch users and manage files (rootless Podman compatibility)
+        if db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB, DatabaseType.POSTGRESQL):
+            security_flags.extend([
+                "--cap-add=SETGID",
+                "--cap-add=SETUID",
+                "--cap-add=CHOWN",  # Needed for file ownership changes
+                "--cap-add=DAC_OVERRIDE",  # Needed for file access
+            ])
+        
+        # Optional resource limits (for future SKU-based limits in Phase 6)
+        if memory_limit_mb is not None and memory_limit_mb > 0:
+            security_flags.append(f"--memory={memory_limit_mb}m")
+        if cpu_limit is not None and cpu_limit > 0:
+            security_flags.append(f"--cpus={cpu_limit}")
+        
+        # Build volume mounts for persistent storage (with SELinux :Z labels for rootless Podman)
+        volume_mounts = []
+        if volume_paths:
+            data_path = volume_paths["data"]
+            config_path = volume_paths["config"]
+            
+            if db_type == DatabaseType.POSTGRESQL:
+                # PostgreSQL stores data in /var/lib/postgresql/data
+                volume_mounts = ["-v", f"{data_path}:/var/lib/postgresql/data:Z"]
+                # Mount config file (Phase 4: Config injection)
+                if config_file_path:
+                    volume_mounts.extend(["-v", f"{config_file_path}:/etc/postgresql/postgresql.conf:Z,ro"])
+            elif db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB):
+                # MySQL/MariaDB stores data in /var/lib/mysql
+                volume_mounts = ["-v", f"{data_path}:/var/lib/mysql:Z"]
+                # Mount config file to /etc/mysql/conf.d/ (Phase 4: Config injection)
+                if config_file_path:
+                    volume_mounts.extend(["-v", f"{config_file_path}:/etc/mysql/conf.d/flux.cnf:Z,ro"])
+            elif db_type == DatabaseType.MONGODB:
+                # MongoDB uses /data/db for data and /data/configdb for config
+                volume_mounts = [
+                    "-v", f"{data_path}:/data/db:Z",
+                    "-v", f"{config_path}:/data/configdb:Z"
+                ]
+                # Config is already accessible in /data/configdb (Phase 4)
+            elif db_type == DatabaseType.REDIS:
+                # Redis uses /data for persistence
+                volume_mounts = ["-v", f"{data_path}:/data:Z"]
+                # Redis config will be passed via command line args (Phase 4)
+            
+            # Mount secrets directory read-only (Phase 5: Secrets Management)
+            if secrets_paths:
+                secrets_dir = volume_paths["secrets"]
+                volume_mounts.extend(["-v", f"{secrets_dir}:/secrets:Z,ro"])
+            
+            # Mount TLS certificates if provided (Phase 6: Advanced Configuration)
+            if tls_cert_path and tls_key_path:
+                import os
+                tls_dir = os.path.dirname(tls_cert_path)
+                volume_mounts.extend(["-v", f"{tls_dir}:/tls:Z,ro"])
+        
+        # Future: Read-only filesystem support
+        # To enable: add "--read-only" to security_flags
+        # Will require tmpfs mounts for writable paths:
+        # PostgreSQL: --tmpfs /var/run/postgresql:rw,noexec,nosuid,size=65536k
+        # MySQL/MariaDB: --tmpfs /var/run/mysqld:rw,noexec,nosuid,size=65536k
+        # MongoDB: --tmpfs /tmp:rw,noexec,nosuid,size=65536k
+        # Redis: --tmpfs /tmp:rw,noexec,nosuid,size=65536k
+        
+        # Build TLS command args if TLS is enabled (Phase 6: Advanced Configuration)
+        tls_args = []
+        if tls_cert_path and tls_key_path:
+            if db_type == DatabaseType.POSTGRESQL:
+                tls_args = [
+                    "-c", "ssl=on",
+                    "-c", "ssl_cert_file=/tls/server.crt",
+                    "-c", "ssl_key_file=/tls/server.key",
+                ]
+            elif db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB):
+                tls_args = [
+                    "--ssl-cert=/tls/server.crt",
+                    "--ssl-key=/tls/server.key",
+                ]
+            elif db_type == DatabaseType.MONGODB:
+                # MongoDB requires combined cert+key file (CRITICAL FIX: use combined.pem)
+                tls_args = [
+                    "--tlsMode=requireTLS",
+                    "--tlsCertificateKeyFile=/tls/combined.pem",
+                ]
+        
+        # Create container with volume mounts
         cmd = [
             "podman", "run", "-d",
             "--name", container_name,
-            "-p", f"{host_port}:{default_port}",
+            "-p", port_binding,
             "--restart", "unless-stopped",
-        ] + env_vars + [image]
+        ] + security_flags + volume_mounts + env_vars + [image] + tls_args
         
         # Handle Redis differently (requirepass is a command arg, not env)
         if db_type == DatabaseType.REDIS:
-            cmd = [
-                "podman", "run", "-d",
-                "--name", container_name,
-                "-p", f"{host_port}:{default_port}",
-                "--restart", "unless-stopped",
-                image,
-                "redis-server", "--requirepass", password,
-            ]
+            # Phase 5: Use secret file for Redis password if available
+            if secrets_paths:
+                # Use shell to read password from file (Redis doesn't support _FILE env vars)
+                cmd = [
+                    "podman", "run", "-d",
+                    "--name", container_name,
+                    "-p", port_binding,
+                    "--restart", "unless-stopped",
+                ] + security_flags + volume_mounts + [
+                    image,
+                    "sh", "-c", "redis-server --requirepass $(cat /secrets/root_password)",
+                ]
+            else:
+                # Fallback to plaintext for ephemeral containers
+                cmd = [
+                    "podman", "run", "-d",
+                    "--name", container_name,
+                    "-p", port_binding,
+                    "--restart", "unless-stopped",
+                ] + security_flags + volume_mounts + [
+                    image,
+                    "redis-server", "--requirepass", password,
+                ]
         
         try:
             # Create container (with reasonable timeout for image pull + start)
@@ -415,9 +617,16 @@ class ContainerService:
                 database=database_name if db_type != DatabaseType.REDIS else "0",
                 username=username,
                 password=password,
+                volume_path=volume_paths["base"] if volume_paths else None,
             )
             
         except Exception as e:
+            # Cleanup volumes if container creation failed
+            if volume_paths and enable_volumes:
+                try:
+                    VolumeService.cleanup_volumes(container_name)
+                except Exception as cleanup_error:
+                    print(f"Warning: Failed to cleanup volumes after error: {cleanup_error}")
             raise RuntimeError(f"Error creating database: {str(e)}")
     
     @staticmethod
@@ -440,6 +649,20 @@ class ContainerService:
         try:
             result = await asyncio.create_subprocess_exec(
                 "podman", "stop", name_or_id,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await result.communicate()
+            return result.returncode == 0
+        except Exception:
+            return False
+    
+    @staticmethod
+    async def restart_container(name_or_id: str) -> bool:
+        """Restart a container"""
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "podman", "restart", name_or_id,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )

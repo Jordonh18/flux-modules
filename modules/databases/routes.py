@@ -29,9 +29,24 @@ from .services.container_service import (
     ContainerStatus,
     DatabaseCredentials,
 )
+from .services.volume_service import VolumeService
 
 # Create router
 router = ModuleRouter("databases")
+
+
+# ============================================================================
+# SKU Definitions (Azure-style tiers)
+# ============================================================================
+
+SKU_DEFINITIONS = {
+    "d1": {"memory_mb": 2048, "cpus": 1.0, "storage_gb": 20},
+    "d2": {"memory_mb": 4096, "cpus": 2.0, "storage_gb": 50},
+    "d4": {"memory_mb": 8192, "cpus": 4.0, "storage_gb": 100},
+    "d8": {"memory_mb": 16384, "cpus": 8.0, "storage_gb": 200},
+    "d16": {"memory_mb": 32768, "cpus": 16.0, "storage_gb": 500},
+    "custom": None,  # Uses provided values
+}
 
 
 # ============================================================================
@@ -52,6 +67,14 @@ class CreateDatabaseRequest(BaseModel):
     type: DatabaseTypeEnum
     name: Optional[str] = None
     database_name: str = "app"
+    sku: str = "d1"
+    memory_limit_mb: Optional[int] = None
+    cpu_limit: Optional[float] = None
+    storage_limit_gb: Optional[int] = None
+    external_access: bool = False
+    tls_enabled: bool = False
+    tls_cert: Optional[str] = None  # Base64 encoded certificate
+    tls_key: Optional[str] = None   # Base64 encoded key
 
 
 class DatabaseInfo(BaseModel):
@@ -199,7 +222,8 @@ async def list_databases(
     # Get stored credentials from database first
     result = await db.execute(text("""
         SELECT id, container_id, container_name, database_type, host, port, 
-               database_name, username, password, status, error_message, created_at
+               database_name, username, password, status, error_message, created_at,
+               sku, memory_limit_mb, cpu_limit, storage_limit_gb, external_access, tls_enabled
         FROM module_databases
         ORDER BY created_at DESC
     """))
@@ -221,6 +245,9 @@ async def list_databases(
         # Always prefer real container status when container exists
         if container:
             status = container.status.value
+            # Map container statuses to user-friendly names
+            if status in ['exited', 'created']:
+                status = 'stopped'
         elif row.status == 'error':
             # Show error status if no container and DB says error
             status = 'error'
@@ -228,11 +255,10 @@ async def list_databases(
             # Show creating if no container yet
             status = 'creating'
         else:
-            status = 'unknown'
+            status = 'stopped'
         
         databases.append({
             "id": row.id,
-            "container_id": row.container_id,
             "name": row.container_name,
             "type": row.database_type,
             "status": status,
@@ -242,7 +268,13 @@ async def list_databases(
             "username": row.username,
             "password": row.password,
             "created_at": row.created_at,
-            "error_message": row.error_message if row.status == 'error' else None,
+            "error_message": row.error_message if status == 'error' else None,
+            "sku": row.sku,
+            "memory_limit_mb": row.memory_limit_mb,
+            "cpu_limit": row.cpu_limit,
+            "storage_limit_gb": row.storage_limit_gb,
+            "external_access": row.external_access,
+            "tls_enabled": row.tls_enabled,
         })
     
     return databases
@@ -269,6 +301,57 @@ async def create_database(
     # Map enum to DatabaseType
     db_type = DatabaseType(request.type.value)
     
+    # Validate TLS configuration (CRITICAL FIX)
+    if request.tls_enabled:
+        if not request.tls_cert or not request.tls_key:
+            raise HTTPException(
+                status_code=400,
+                detail="TLS enabled requires both certificate and private key"
+            )
+    
+    # Apply SKU resources or use custom values
+    if request.sku == "custom":
+        # Use provided custom values
+        memory_limit_mb = request.memory_limit_mb
+        cpu_limit = request.cpu_limit
+        storage_limit_gb = request.storage_limit_gb
+        
+        # Validate custom values are provided
+        if not memory_limit_mb or not cpu_limit or not storage_limit_gb:
+            raise HTTPException(
+                status_code=400,
+                detail="Custom SKU requires memory_limit_mb, cpu_limit, and storage_limit_gb"
+            )
+        
+        # Validate custom resource limits (MAJOR FIX)
+        if memory_limit_mb < 512 or memory_limit_mb > 65536:
+            raise HTTPException(
+                status_code=400,
+                detail="Memory must be between 512MB and 64GB"
+            )
+        if cpu_limit < 0.5 or cpu_limit > 32:
+            raise HTTPException(
+                status_code=400,
+                detail="CPU must be between 0.5 and 32 vCPUs"
+            )
+        if storage_limit_gb < 10 or storage_limit_gb > 1000:
+            raise HTTPException(
+                status_code=400,
+                detail="Storage must be between 10GB and 1000GB"
+            )
+    else:
+        # Apply SKU tier resources
+        if request.sku not in SKU_DEFINITIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid SKU tier: {request.sku}. Must be one of: {', '.join(SKU_DEFINITIONS.keys())}"
+            )
+        
+        sku_config = SKU_DEFINITIONS[request.sku]
+        memory_limit_mb = sku_config["memory_mb"]
+        cpu_limit = sku_config["cpus"]
+        storage_limit_gb = sku_config["storage_gb"]
+    
     # Get already-used ports from database (including creating databases)
     port_result = await db.execute(text("SELECT port FROM module_databases"))
     used_ports = {row.port for row in port_result.fetchall()}
@@ -287,11 +370,13 @@ async def create_database(
     host_port = ContainerService.find_available_port(exclude_ports=used_ports)
     
     try:
-        # Insert database record immediately with 'creating' status
+        # Insert database record immediately with 'creating' status and config
         result = await db.execute(text("""
             INSERT INTO module_databases 
-            (container_id, container_name, database_type, host, port, database_name, username, password, status)
-            VALUES (:container_id, :container_name, :database_type, :host, :port, :database_name, :username, :password, 'creating')
+            (container_id, container_name, database_type, host, port, database_name, username, password, status,
+             sku, memory_limit_mb, cpu_limit, storage_limit_gb, external_access, tls_enabled)
+            VALUES (:container_id, :container_name, :database_type, :host, :port, :database_name, :username, :password, 'creating',
+                    :sku, :memory_limit_mb, :cpu_limit, :storage_limit_gb, :external_access, :tls_enabled)
             RETURNING id
         """), {
             "container_id": None,  # Will be updated when container is created
@@ -302,6 +387,12 @@ async def create_database(
             "database_name": request.database_name,
             "username": username,
             "password": password,
+            "sku": request.sku,
+            "memory_limit_mb": memory_limit_mb,
+            "cpu_limit": cpu_limit,
+            "storage_limit_gb": storage_limit_gb,
+            "external_access": request.external_access,
+            "tls_enabled": request.tls_enabled,
         })
         db_id = result.scalar()
         await db.commit()
@@ -310,6 +401,37 @@ async def create_database(
         async def create_container_background():
             """Background task to create container and update status"""
             try:
+                # Handle TLS cert upload if provided
+                tls_cert_path = None
+                tls_key_path = None
+                if request.tls_enabled and request.tls_cert and request.tls_key:
+                    # Create volumes first (needed for TLS cert storage)
+                    VolumeService.create_volumes(container_name)
+                    
+                    # Save TLS certificates
+                    tls_paths = VolumeService.save_tls_certs(
+                        container_name,
+                        request.tls_cert,
+                        request.tls_key
+                    )
+                    tls_cert_path = tls_paths["cert_path"]
+                    tls_key_path = tls_paths["key_path"]
+                    
+                    # Update database record with TLS paths
+                    try:
+                        async with get_db_context() as background_db:
+                            await background_db.execute(text("""
+                                UPDATE module_databases 
+                                SET tls_cert_path = :tls_cert_path, tls_key_path = :tls_key_path, updated_at = datetime('now')
+                                WHERE id = :id
+                            """), {
+                                "tls_cert_path": tls_cert_path,
+                                "tls_key_path": tls_key_path,
+                                "id": db_id
+                            })
+                    except Exception as db_error:
+                        print(f"Failed to update TLS paths: {db_error}")
+                
                 credentials = await ContainerService.create_database(
                     db_type=db_type,
                     name=request.name,
@@ -317,7 +439,12 @@ async def create_database(
                     container_name=container_name,
                     username=username,
                     password=password,
-                    host_port=host_port
+                    host_port=host_port,
+                    external_access=request.external_access,
+                    memory_limit_mb=memory_limit_mb,
+                    cpu_limit=cpu_limit,
+                    tls_cert_path=tls_cert_path,
+                    tls_key_path=tls_key_path,
                 )
                 
                 # Update record with container ID and success status
@@ -325,10 +452,11 @@ async def create_database(
                     async with get_db_context() as background_db:
                         await background_db.execute(text("""
                             UPDATE module_databases 
-                            SET container_id = :container_id, status = 'running', updated_at = datetime('now')
+                            SET container_id = :container_id, volume_path = :volume_path, status = 'running', error_message = NULL, updated_at = datetime('now')
                             WHERE id = :id
                         """), {
                             "container_id": credentials.container_id,
+                            "volume_path": credentials.volume_path,
                             "id": db_id
                         })
                 except Exception as db_error:
@@ -367,6 +495,12 @@ async def create_database(
                 "username": username,
                 "password": password,
                 "status": "creating",
+                "sku": request.sku,
+                "memory_limit_mb": memory_limit_mb,
+                "cpu_limit": cpu_limit,
+                "storage_limit_gb": storage_limit_gb,
+                "external_access": request.external_access,
+                "tls_enabled": request.tls_enabled,
             }
         }
         
@@ -403,6 +537,13 @@ async def start_database(
     
     success = await ContainerService.start_container(row.container_name)
     if success:
+        # Clear any stale error messages when container starts successfully
+        await db.execute(text("""
+            UPDATE module_databases 
+            SET status = 'running', error_message = NULL, updated_at = datetime('now')
+            WHERE id = :id
+        """), {"id": database_id})
+        await db.commit()
         return {"success": True, "message": "Database started"}
     raise HTTPException(status_code=500, detail="Failed to start database")
 
@@ -430,6 +571,36 @@ async def stop_database(
     raise HTTPException(status_code=500, detail="Failed to stop database")
 
 
+@router.post("/databases/{database_id}/restart")
+async def restart_database(
+    database_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:write"))
+):
+    """
+    Restart a database container.
+    """
+    result = await db.execute(text(
+        "SELECT container_name FROM module_databases WHERE id = :id"
+    ), {"id": database_id})
+    row = result.fetchone()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Database not found")
+    
+    success = await ContainerService.restart_container(row.container_name)
+    if success:
+        # Clear any stale error messages when container restarts successfully
+        await db.execute(text("""
+            UPDATE module_databases 
+            SET status = 'running', error_message = NULL, updated_at = datetime('now')
+            WHERE id = :id
+        """), {"id": database_id})
+        await db.commit()
+        return {"success": True, "message": "Database restarted"}
+    raise HTTPException(status_code=500, detail="Failed to restart database")
+
+
 @router.delete("/databases/{database_id}")
 async def delete_database(
     database_id: int,
@@ -438,6 +609,7 @@ async def delete_database(
 ):
     """
     Delete a database container and its stored credentials.
+    Also removes persistent storage volumes.
     """
     result = await db.execute(text(
         "SELECT container_name FROM module_databases WHERE id = :id"
@@ -449,6 +621,12 @@ async def delete_database(
     
     # Remove container (force stop if running)
     await ContainerService.remove_container(row.container_name, force=True)
+    
+    # Cleanup persistent volumes
+    try:
+        VolumeService.cleanup_volumes(row.container_name)
+    except Exception as vol_error:
+        print(f"Warning: Failed to cleanup volumes for {row.container_name}: {vol_error}")
     
     # Remove from database
     await db.execute(text("DELETE FROM module_databases WHERE id = :id"), {"id": database_id})
