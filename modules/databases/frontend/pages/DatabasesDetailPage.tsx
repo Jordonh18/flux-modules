@@ -667,7 +667,7 @@ function DatabaseDetailPageContent() {
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground">SKU Tier</span>
                   <Badge variant="outline" className="font-mono">
-                    {database.sku?.toUpperCase() || 'D1'}
+                    {database.sku?.toUpperCase() || 'B2'}
                   </Badge>
                 </div>
                 <Separator />

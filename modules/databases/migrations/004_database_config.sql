@@ -4,8 +4,8 @@
 -- Adds columns for SKU tiers, resource limits, external access, and TLS configuration.
 -- Required for Phase 6: Advanced Configuration Options
 
--- Add SKU tier column (d1, d2, d4, d8, d16, custom)
-ALTER TABLE module_databases ADD COLUMN sku TEXT DEFAULT 'd1';
+-- Add SKU tier column (b-series, d-series, e-series, f-series, custom)
+ALTER TABLE module_databases ADD COLUMN sku TEXT DEFAULT 'b2';
 
 -- Add resource limit columns
 ALTER TABLE module_databases ADD COLUMN memory_limit_mb INTEGER DEFAULT 2048;

@@ -40,11 +40,36 @@ router = ModuleRouter("databases")
 # ============================================================================
 
 SKU_DEFINITIONS = {
-    "d1": {"memory_mb": 2048, "cpus": 1.0, "storage_gb": 20},
+    # B-series: Burstable (Cost-Effective for Variable Workloads)
+    "b1": {"memory_mb": 1024, "cpus": 0.5, "storage_gb": 10},
+    "b2": {"memory_mb": 2048, "cpus": 1.0, "storage_gb": 20},
+    "b4": {"memory_mb": 4096, "cpus": 2.0, "storage_gb": 40},
+    
+    # D-series: General Purpose (Balanced CPU-to-Memory Ratio)
     "d2": {"memory_mb": 4096, "cpus": 2.0, "storage_gb": 50},
     "d4": {"memory_mb": 8192, "cpus": 4.0, "storage_gb": 100},
     "d8": {"memory_mb": 16384, "cpus": 8.0, "storage_gb": 200},
     "d16": {"memory_mb": 32768, "cpus": 16.0, "storage_gb": 500},
+    "d32": {"memory_mb": 65536, "cpus": 32.0, "storage_gb": 1024},
+    "d64": {"memory_mb": 131072, "cpus": 64.0, "storage_gb": 2048},
+    
+    # E-series: Memory Optimized (High Memory-to-CPU Ratio)
+    "e2": {"memory_mb": 8192, "cpus": 2.0, "storage_gb": 50},
+    "e4": {"memory_mb": 16384, "cpus": 4.0, "storage_gb": 100},
+    "e8": {"memory_mb": 32768, "cpus": 8.0, "storage_gb": 200},
+    "e16": {"memory_mb": 65536, "cpus": 16.0, "storage_gb": 500},
+    "e32": {"memory_mb": 131072, "cpus": 32.0, "storage_gb": 1024},
+    "e64": {"memory_mb": 262144, "cpus": 64.0, "storage_gb": 2048},
+    
+    # F-series: Compute Optimized (High CPU-to-Memory Ratio)
+    "f2": {"memory_mb": 2048, "cpus": 2.0, "storage_gb": 30},
+    "f4": {"memory_mb": 4096, "cpus": 4.0, "storage_gb": 60},
+    "f8": {"memory_mb": 8192, "cpus": 8.0, "storage_gb": 120},
+    "f16": {"memory_mb": 16384, "cpus": 16.0, "storage_gb": 240},
+    "f32": {"memory_mb": 32768, "cpus": 32.0, "storage_gb": 480},
+    "f64": {"memory_mb": 65536, "cpus": 64.0, "storage_gb": 960},
+    
+    # Custom: User-defined resources
     "custom": None,  # Uses provided values
 }
 
