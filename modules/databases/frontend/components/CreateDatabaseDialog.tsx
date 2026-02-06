@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Slider } from '@/components/ui/slider';
-import { Loader2, AlertTriangle } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { DATABASE_SKUS } from '../types/database-skus';
@@ -225,19 +225,10 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                 <SelectValue placeholder="Select VNet or use port mapping" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground">No VNet (port mapping)</span>
-                  </div>
-                </SelectItem>
+                <SelectItem value="none">No VNet (port mapping)</SelectItem>
                 {availableVNets.map((vnet: any) => (
                   <SelectItem key={vnet.id} value={vnet.name}>
-                    <div className="flex flex-col">
-                      <span className="font-medium">{vnet.name}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {vnet.subnet} • {vnet.available_ips} IPs available
-                      </span>
-                    </div>
+                    {vnet.name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -422,64 +413,58 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
             </div>
           )}
 
-          {/* Networking & Security */}
-          <div className="space-y-4 pt-2">
-              {/* External Access */}
-              <div className="flex items-center justify-between p-3 rounded-md border bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/50">
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-500 flex-shrink-0" />
-                  <div>
-                    <Label className="text-sm font-medium cursor-pointer">Allow public access</Label>
-                    <p className="text-xs text-muted-foreground">Database accessible from any network</p>
-                  </div>
-                </div>
-                <Checkbox
-                  checked={formState.externalAccess}
-                  onCheckedChange={(checked) => setFormState({...formState, externalAccess: checked === true})}
-                />
-              </div>
+          {/* External Access */}
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-sm font-medium">Allow public access</Label>
+              <p className="text-xs text-muted-foreground">Database accessible from any network</p>
+            </div>
+            <Checkbox
+              checked={formState.externalAccess}
+              onCheckedChange={(checked) => setFormState({...formState, externalAccess: checked === true})}
+            />
+          </div>
 
-              {/* TLS */}
-              <div className="p-3 rounded-md border space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label className="text-sm font-medium cursor-pointer">TLS Encryption</Label>
-                    <p className="text-xs text-muted-foreground">Secure with custom certificates</p>
-                  </div>
-                  <Checkbox
-                    checked={formState.tlsEnabled}
-                    onCheckedChange={(checked) => setFormState({...formState, tlsEnabled: checked === true})}
+          {/* TLS */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm font-medium">TLS Encryption</Label>
+                <p className="text-xs text-muted-foreground">Secure with custom certificates</p>
+              </div>
+              <Checkbox
+                checked={formState.tlsEnabled}
+                onCheckedChange={(checked) => setFormState({...formState, tlsEnabled: checked === true})}
+              />
+            </div>
+
+            {formState.tlsEnabled && (
+              <div className="space-y-3 pt-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Certificate (PEM)</Label>
+                  <Input
+                    type="file"
+                    accept=".pem,.crt,.cer"
+                    onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0], 'tlsCert')}
+                    className={`text-xs ${errors.tlsCert ? "border-destructive" : ""}`}
                   />
+                  {errors.tlsCert && <p className="text-xs text-destructive">{errors.tlsCert}</p>}
+                  {formState.tlsCert && <p className="text-xs text-green-600">Certificate loaded</p>}
                 </div>
 
-                {formState.tlsEnabled && (
-                  <div className="space-y-3 pt-2 border-t">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Certificate (PEM)</Label>
-                      <Input
-                        type="file"
-                        accept=".pem,.crt,.cer"
-                        onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0], 'tlsCert')}
-                        className={`text-xs ${errors.tlsCert ? "border-destructive" : ""}`}
-                      />
-                      {errors.tlsCert && <p className="text-xs text-destructive">{errors.tlsCert}</p>}
-                      {formState.tlsCert && <p className="text-xs text-green-600">✓ Certificate loaded</p>}
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Private Key (PEM)</Label>
-                      <Input
-                        type="file"
-                        accept=".key,.pem"
-                        onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0], 'tlsKey')}
-                        className={`text-xs ${errors.tlsKey ? "border-destructive" : ""}`}
-                      />
-                      {errors.tlsKey && <p className="text-xs text-destructive">{errors.tlsKey}</p>}
-                      {formState.tlsKey && <p className="text-xs text-green-600">✓ Key loaded</p>}
-                    </div>
-                  </div>
-                )}
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Private Key (PEM)</Label>
+                  <Input
+                    type="file"
+                    accept=".key,.pem"
+                    onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0], 'tlsKey')}
+                    className={`text-xs ${errors.tlsKey ? "border-destructive" : ""}`}
+                  />
+                  {errors.tlsKey && <p className="text-xs text-destructive">{errors.tlsKey}</p>}
+                  {formState.tlsKey && <p className="text-xs text-green-600">Key loaded</p>}
+                </div>
               </div>
+            )}
           </div>
 
           <DialogFooter>
