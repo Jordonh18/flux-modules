@@ -4,7 +4,7 @@
  * Azure-style database management with tabs for:
  * - Overview: Connection info, stats, and status
  * - Logs: Real-time database logs
- * - Backups: Backup/restore management
+ * - Snapshots: Snapshot/restore management
  * - Settings: Database configuration
  */
 
@@ -120,7 +120,7 @@ interface InspectInfo {
   };
 }
 
-interface Backup {
+interface Snapshot {
   id: number;
   path: string;
   size: number;
@@ -146,14 +146,14 @@ const detailApi = {
     api.get<InspectInfo>(`/modules/databases/databases/${id}/inspect`).then(r => r.data),
   getLogs: (id: number, lines = 200) => 
     api.get<{ logs: string }>(`/modules/databases/databases/${id}/logs?lines=${lines}`).then(r => r.data),
-  getBackups: (id: number) => 
-    api.get<{ backups: Backup[] }>(`/modules/databases/databases/${id}/backups`).then(r => r.data),
-  createBackup: (id: number) => 
-    api.post(`/modules/databases/databases/${id}/backup`).then(r => r.data),
-  restoreBackup: (databaseId: number, backupId: number) => 
-    api.post(`/modules/databases/databases/${databaseId}/restore/${backupId}`).then(r => r.data),
-  deleteBackup: (databaseId: number, backupId: number) => 
-    api.delete(`/modules/databases/databases/${databaseId}/backups/${backupId}`).then(r => r.data),
+  getSnapshots: (id: number) => 
+    api.get<{ snapshots: Snapshot[] }>(`/modules/databases/databases/${id}/snapshots`).then(r => r.data),
+  createSnapshot: (id: number) => 
+    api.post(`/modules/databases/databases/${id}/snapshot`).then(r => r.data),
+  restoreSnapshot: (databaseId: number, snapshotId: number) => 
+    api.post(`/modules/databases/databases/${databaseId}/restore/${snapshotId}`).then(r => r.data),
+  deleteSnapshot: (databaseId: number, snapshotId: number) => 
+    api.delete(`/modules/databases/databases/${databaseId}/snapshots/${snapshotId}`).then(r => r.data),
   startDatabase: (id: number) => 
     api.post(`/modules/databases/databases/${id}/start`).then(r => r.data),
   stopDatabase: (id: number) => 
@@ -191,8 +191,7 @@ function DatabaseDetailPageContent() {
   const [showPassword, setShowPassword] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [restoreDialogBackup, setRestoreDialogBackup] = useState<Backup | null>(null);
-  const [selectedTable, setSelectedTable] = useState<string>('');
+  const [restoreDialogSnapshot, setRestoreDialogSnapshot] = useState<Snapshot | null>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   // Queries
@@ -233,29 +232,10 @@ function DatabaseDetailPageContent() {
     }
   }, [logsData, activeTab]);
 
-  const { data: backupsData, refetch: refetchBackups } = useQuery({
-    queryKey: ['databases', 'backups', databaseId],
-    queryFn: () => detailApi.getBackups(databaseId),
-    enabled: databaseId > 0 && activeTab === 'backups',
-  });
-
-  // Explorer queries
-  const { data: tablesData, isLoading: tablesLoading } = useQuery({
-    queryKey: ['databases', 'tables', databaseId],
-    queryFn: () => detailApi.getTables(databaseId),
-    enabled: databaseId > 0 && activeTab === 'explorer' && database?.status === 'running',
-  });
-
-  const { data: schemaData, isLoading: schemaLoading } = useQuery({
-    queryKey: ['databases', 'schema', databaseId, selectedTable],
-    queryFn: () => detailApi.getTableSchema(databaseId, selectedTable),
-    enabled: databaseId > 0 && !!selectedTable && activeTab === 'explorer' && database?.status === 'running',
-  });
-
-  const { data: tableData } = useQuery({
-    queryKey: ['databases', 'tableData', databaseId, selectedTable],
-    queryFn: () => detailApi.getTableData(databaseId, selectedTable, 10),
-    enabled: databaseId > 0 && !!selectedTable && activeTab === 'explorer' && database?.status === 'running',
+  const { data: snapshotsData, refetch: refetchSnapshots } = useQuery({
+    queryKey: ['databases', 'snapshots', databaseId],
+    queryFn: () => detailApi.getSnapshots(databaseId),
+    enabled: databaseId > 0 && activeTab === 'snapshots',
   });
 
   // Mutations
@@ -360,17 +340,17 @@ function DatabaseDetailPageContent() {
     },
   });
 
-  const backupMutation = useMutation({
-    mutationFn: () => detailApi.createBackup(databaseId),
+  const snapshotMutation = useMutation({
+    mutationFn: () => detailApi.createSnapshot(databaseId),
     onSuccess: () => {
-      refetchBackups();
+      refetchSnapshots();
       toast.success('Backup created successfully');
     },
     onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to create backup'),
   });
 
   const restoreMutation = useMutation({
-    mutationFn: (backupId: number) => detailApi.restoreBackup(databaseId, backupId),
+    mutationFn: (snapshotId: number) => detailApi.restoreSnapshot(databaseId, snapshotId),
     onSuccess: () => {
       setRestoreDialogBackup(null);
       toast.success('Database restored successfully');
@@ -378,10 +358,10 @@ function DatabaseDetailPageContent() {
     onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to restore backup'),
   });
 
-  const deleteBackupMutation = useMutation({
-    mutationFn: (backupId: number) => detailApi.deleteBackup(databaseId, backupId),
+  const deleteSnapshotMutation = useMutation({
+    mutationFn: (snapshotId: number) => detailApi.deleteSnapshot(databaseId, snapshotId),
     onSuccess: () => {
-      refetchBackups();
+      refetchSnapshots();
       toast.success('Backup deleted');
     },
     onError: () => toast.error('Failed to delete backup'),
@@ -478,6 +458,15 @@ function DatabaseDetailPageContent() {
               Start
             </Button>
           )}
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => window.open(`/api/modules/databases/databases/${databaseId}/export`, '_blank')}
+            disabled={database.status !== 'running'}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Export
+          </Button>
           <Button variant="destructive" size="sm" onClick={() => setDeleteDialogOpen(true)}>
             <Trash2 className="mr-2 h-4 w-4" />
             Delete
@@ -509,13 +498,9 @@ function DatabaseDetailPageContent() {
             <ScrollText className="h-4 w-4" />
             Logs
           </TabsTrigger>
-          <TabsTrigger value="backups" className="flex items-center gap-2">
+          <TabsTrigger value="snapshots" className="flex items-center gap-2">
             <HardDrive className="h-4 w-4" />
-            Backups
-          </TabsTrigger>
-          <TabsTrigger value="explorer" className="flex items-center gap-2">
-            <Table className="h-4 w-4" />
-            Explorer
+            Snapshots
           </TabsTrigger>
         </TabsList>
 
@@ -696,8 +681,8 @@ function DatabaseDetailPageContent() {
               </CardHeader>
               <CardContent className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground flex items-center gap-2">
-                    <Network className="h-4 w-4" /> Public Access
+                  <span className="text-sm text-muted-foreground">
+                    Public Access
                   </span>
                   <Badge variant={database.external_access ? 'default' : 'secondary'}>
                     {database.external_access ? 'Enabled' : 'Disabled'}
@@ -817,51 +802,51 @@ function DatabaseDetailPageContent() {
           </Card>
         </TabsContent>
 
-        {/* Backups Tab */}
-        <TabsContent value="backups" className="space-y-4">
+        {/* Snapshots Tab */}
+        <TabsContent value="snapshots" className="space-y-4">
           <Card>
             <CardHeader>
               <CardTitle className="text-lg flex items-center justify-between">
-                Backups
+                Snapshots
                 <Button 
-                  onClick={() => backupMutation.mutate()} 
-                  disabled={backupMutation.isPending || !isRunning}
+                  onClick={() => snapshotMutation.mutate()} 
+                  disabled={snapshotMutation.isPending || !isRunning}
                 >
-                  {backupMutation.isPending ? (
+                  {snapshotMutation.isPending ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : (
                     <Download className="mr-2 h-4 w-4" />
                   )}
-                  Create Backup
+                  Create Snapshot
                 </Button>
               </CardTitle>
               <CardDescription>
-                {isRunning ? 'Create and manage database backups' : 'Start the database to create backups'}
+                {isRunning ? 'Create and manage database snapshots' : 'Start the database to create snapshots'}
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {backupsData?.backups?.length === 0 ? (
+              {snapshotsData?.snapshots?.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
                   <HardDrive className="h-12 w-12 mb-4 opacity-50" />
-                  <p>No backups yet</p>
-                  <p className="text-sm">Create your first backup to protect your data</p>
+                  <p>No snapshots yet</p>
+                  <p className="text-sm">Create your first snapshot to protect your data</p>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {backupsData?.backups?.map((backup) => (
+                  {snapshotsData?.snapshots?.map((snapshot) => (
                     <div 
-                      key={backup.id}
+                      key={snapshot.id}
                       className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors"
                     >
                       <div className="flex items-center gap-3">
                         <HardDrive className="h-5 w-5 text-muted-foreground" />
                         <div>
-                          <p className="font-medium text-sm">{backup.path.split('/').pop()}</p>
+                          <p className="font-medium text-sm">{snapshot.path.split('/').pop()}</p>
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <Clock className="h-3 w-3" />
-                            {formatDate(backup.created_at)}
+                            {formatDate(snapshot.created_at)}
                             <span>•</span>
-                            {formatBytes(backup.size)}
+                            {formatBytes(snapshot.size)}
                           </div>
                         </div>
                       </div>
@@ -869,7 +854,7 @@ function DatabaseDetailPageContent() {
                         <Button 
                           variant="outline" 
                           size="sm"
-                          onClick={() => setRestoreDialogBackup(backup)}
+                          onClick={() => setRestoreDialogSnapshot(snapshot)}
                           disabled={!isRunning}
                         >
                           <Upload className="mr-2 h-4 w-4" />
@@ -879,7 +864,7 @@ function DatabaseDetailPageContent() {
                           variant="ghost" 
                           size="icon"
                           className="text-destructive hover:text-destructive"
-                          onClick={() => deleteBackupMutation.mutate(backup.id)}
+                          onClick={() => deleteSnapshotMutation.mutate(snapshot.id)}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -890,180 +875,6 @@ function DatabaseDetailPageContent() {
               )}
             </CardContent>
           </Card>
-        </TabsContent>
-
-        {/* Explorer Tab */}
-        <TabsContent value="explorer" className="space-y-4">
-          {!isRunning ? (
-            <Card>
-              <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                <Table className="h-12 w-12 mb-4 opacity-50" />
-                <p>Database is not running</p>
-                <p className="text-sm">Start the database to explore tables</p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid gap-4 md:grid-cols-3">
-              {/* Tables List */}
-              <Card className="md:col-span-1">
-                <CardHeader>
-                  <CardTitle className="text-lg">
-                    Tables
-                  </CardTitle>
-                  <CardDescription>Select a table to explore</CardDescription>
-                </CardHeader>
-                <CardContent className="p-0">
-                  <ScrollArea className="max-h-[60vh]">
-                    <div className="p-4 space-y-2">
-                      {database.type === 'redis' ? (
-                        <div className="text-sm text-muted-foreground text-center py-8">
-                          Redis uses key-value pairs.
-                          <br />
-                          Use a Redis client to explore data.
-                        </div>
-                      ) : tablesLoading ? (
-                        <div className="text-sm text-muted-foreground text-center py-8">
-                          <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
-                          Loading tables...
-                        </div>
-                      ) : !tablesData?.tables || tablesData.tables.length === 0 ? (
-                        <div className="text-sm text-muted-foreground text-center py-8">
-                          No tables found
-                        </div>
-                      ) : (
-                        <div className="space-y-1">
-                          {tablesData.tables.map((tableName) => (
-                            <Button
-                              key={tableName}
-                              variant={selectedTable === tableName ? 'secondary' : 'ghost'}
-                              className="w-full justify-start"
-                              onClick={() => setSelectedTable(tableName)}
-                            >
-                              <Table className="h-4 w-4 mr-2" />
-                              {tableName}
-                            </Button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </ScrollArea>
-                </CardContent>
-              </Card>
-
-              {/* Table Details & Data */}
-              <Card className="md:col-span-2">
-                <CardHeader>
-                  <CardTitle className="text-lg">
-                    {selectedTable ? (
-                      <>
-                        Table: {selectedTable}
-                      </>
-                    ) : (
-                      <>
-                        Explorer
-                      </>
-                    )}
-                  </CardTitle>
-                  <CardDescription>
-                    {selectedTable ? `Viewing structure and data for ${selectedTable}` : 'Select a table from the list'}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {!selectedTable ? (
-                    <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                      <Search className="h-12 w-12 mb-4 opacity-50" />
-                      <p>No table selected</p>
-                      <p className="text-sm">Select a table from the list to view its structure and data</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {/* Table Schema */}
-                      <div>
-                        <h4 className="text-sm font-semibold mb-2">
-                          Schema
-                        </h4>
-                        <ScrollArea className="max-h-[25vh] rounded border">
-                          <div className="p-3 space-y-2">
-                            {schemaLoading ? (
-                              <div className="text-sm text-muted-foreground text-center py-4">
-                                <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
-                                Loading schema...
-                              </div>
-                            ) : !schemaData?.schema || schemaData.schema.length === 0 ? (
-                              <div className="text-sm text-muted-foreground text-center py-4">
-                                No schema information available
-                              </div>
-                            ) : (
-                              schemaData.schema.map((column, idx) => (
-                                <div key={idx}>
-                                  {idx > 0 && <Separator />}
-                                  <div className="flex items-center justify-between text-sm">
-                                    <span className="font-mono">{column.name}</span>
-                                    <Badge variant="outline" className="text-xs">{column.type}</Badge>
-                                  </div>
-                                </div>
-                              ))
-                            )}
-                          </div>
-                        </ScrollArea>
-                      </div>
-
-                      {/* Sample Data */}
-                      <div>
-                        <h4 className="text-sm font-semibold mb-2">
-                          Sample Data (10 rows)
-                        </h4>
-                        <ScrollArea className="max-h-[25vh] rounded border">
-                          <div className="p-3">
-                            {!tableData?.data || tableData.data.rows.length === 0 ? (
-                              <div className="text-sm text-muted-foreground text-center py-4">
-                                {!tableData ? (
-                                  <>
-                                    <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
-                                    <p>Loading data...</p>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Database className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                                    <p>No data in table</p>
-                                  </>
-                                )}
-                              </div>
-                            ) : (
-                              <div className="overflow-x-auto">
-                                <table className="w-full text-sm">
-                                  <thead>
-                                    <tr className="border-b">
-                                      {tableData.data.columns.map((col, idx) => (
-                                        <th key={idx} className="text-left p-2 font-semibold whitespace-nowrap">
-                                          {col}
-                                        </th>
-                                      ))}
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {tableData.data.rows.map((row, rowIdx) => (
-                                      <tr key={rowIdx} className="border-b hover:bg-muted/50">
-                                        {row.map((cell, cellIdx) => (
-                                          <td key={cellIdx} className="p-2 max-w-xs truncate">
-                                            {cell}
-                                          </td>
-                                        ))}
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
-                          </div>
-                        </ScrollArea>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          )}
         </TabsContent>
       </Tabs>
 
@@ -1089,18 +900,18 @@ function DatabaseDetailPageContent() {
       </AlertDialog>
 
       {/* Restore Confirmation Dialog */}
-      <AlertDialog open={!!restoreDialogBackup} onOpenChange={() => setRestoreDialogBackup(null)}>
+      <AlertDialog open={!!restoreDialogSnapshot} onOpenChange={() => setRestoreDialogSnapshot(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Restore from Backup</AlertDialogTitle>
+            <AlertDialogTitle>Restore from Snapshot</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to restore the database from this backup? This will overwrite the current data with the backup data.
+              Are you sure you want to restore the database from this snapshot? This will overwrite the current data with the snapshot data.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => restoreDialogBackup && restoreMutation.mutate(restoreDialogBackup.id)}
+              onClick={() => restoreDialogSnapshot && restoreMutation.mutate(restoreDialogSnapshot.id)}
             >
               Restore
             </AlertDialogAction>

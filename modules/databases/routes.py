@@ -822,15 +822,15 @@ async def inspect_database(
     }
 
 
-@router.post("/databases/{database_id}/backup")
-async def backup_database(
+@router.post("/databases/{database_id}/snapshot")
+async def snapshot_database(
     database_id: int,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_permission("databases:write"))
 ):
     """
-    Create a backup of the database.
-    Returns the backup file path.
+    Create a snapshot of the database.
+    Returns the snapshot file path.
     """
     import os
     from datetime import datetime
@@ -843,79 +843,79 @@ async def backup_database(
     if not row:
         raise HTTPException(status_code=404, detail="Database not found")
     
-    # Create backups directory
-    backup_dir = os.path.expanduser("~/.flux/backups/databases")
-    os.makedirs(backup_dir, exist_ok=True)
+    # Create snapshots directory
+    snapshot_dir = os.path.expanduser("~/.flux/snapshots/databases")
+    os.makedirs(snapshot_dir, exist_ok=True)
     
-    # Generate backup filename
+    # Generate snapshot filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_filename = f"{row.container_name}_{timestamp}.sql"
+    snapshot_filename = f"{row.container_name}_{timestamp}.sql"
     if row.database_type == "mongodb":
-        backup_filename = f"{row.container_name}_{timestamp}.archive"
+        snapshot_filename = f"{row.container_name}_{timestamp}.archive"
     elif row.database_type == "redis":
-        backup_filename = f"{row.container_name}_{timestamp}.rdb"
+        snapshot_filename = f"{row.container_name}_{timestamp}.rdb"
     
-    backup_path = os.path.join(backup_dir, backup_filename)
+    snapshot_path = os.path.join(snapshot_dir, snapshot_filename)
     
     db_type = DatabaseType(row.database_type)
-    success, message = await ContainerService.backup_database(
-        row.container_name, db_type, row.database_name, row.username, row.password, backup_path
+    success, message = await ContainerService.snapshot_database(
+        row.container_name, db_type, row.database_name, row.username, row.password, snapshot_path
     )
     
     if success:
-        # Store backup record
+        # Store snapshot record
         await db.execute(text("""
-            INSERT INTO databases_backups (database_id, backup_path, backup_size, created_at)
-            VALUES (:database_id, :backup_path, :backup_size, datetime('now'))
+            INSERT INTO databases_snapshots (database_id, snapshot_path, snapshot_size, created_at)
+            VALUES (:database_id, :snapshot_path, :snapshot_size, datetime('now'))
         """), {
             "database_id": database_id,
-            "backup_path": backup_path,
-            "backup_size": os.path.getsize(backup_path) if os.path.exists(backup_path) else 0,
+            "snapshot_path": snapshot_path,
+            "snapshot_size": os.path.getsize(snapshot_path) if os.path.exists(snapshot_path) else 0,
         })
         await db.commit()
         
-        return {"success": True, "message": message, "backup_path": backup_path}
+        return {"success": True, "message": message, "snapshot_path": snapshot_path}
     
     raise HTTPException(status_code=500, detail=message)
 
 
-@router.get("/databases/{database_id}/backups")
-async def list_database_backups(
+@router.get("/databases/{database_id}/snapshots")
+async def list_database_snapshots(
     database_id: int,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_permission("databases:read"))
 ):
     """
-    List all backups for a database.
+    List all snapshots for a database.
     """
     result = await db.execute(text("""
-        SELECT id, backup_path, backup_size, created_at
-        FROM databases_backups
+        SELECT id, snapshot_path, snapshot_size, created_at
+        FROM databases_snapshots
         WHERE database_id = :database_id
         ORDER BY created_at DESC
     """), {"database_id": database_id})
     
-    backups = []
+    snapshots = []
     for row in result.fetchall():
-        backups.append({
+        snapshots.append({
             "id": row.id,
-            "path": row.backup_path,
-            "size": row.backup_size,
+            "path": row.snapshot_path,
+            "size": row.snapshot_size,
             "created_at": row.created_at,
         })
     
-    return {"backups": backups}
+    return {"snapshots": snapshots}
 
 
-@router.post("/databases/{database_id}/restore/{backup_id}")
+@router.post("/databases/{database_id}/restore/{snapshot_id}")
 async def restore_database(
     database_id: int,
-    backup_id: int,
+    snapshot_id: int,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_permission("databases:write"))
 ):
     """
-    Restore a database from a backup.
+    Restore a database from a snapshot.
     """
     # Get database info
     db_result = await db.execute(text(
@@ -927,18 +927,18 @@ async def restore_database(
         raise HTTPException(status_code=404, detail="Database not found")
     
     # Get backup info
-    backup_result = await db.execute(text(
-        "SELECT backup_path FROM databases_backups WHERE id = :id AND database_id = :database_id"
-    ), {"id": backup_id, "database_id": database_id})
-    backup_row = backup_result.fetchone()
+    snapshot_result = await db.execute(text(
+        "SELECT snapshot_path FROM databases_snapshots WHERE id = :id AND database_id = :database_id"
+    ), {"id": snapshot_id, "database_id": database_id})
+    snapshot_row = snapshot_result.fetchone()
     
-    if not backup_row:
-        raise HTTPException(status_code=404, detail="Backup not found")
+    if not snapshot_row:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
     
     db_type = DatabaseType(db_row.database_type)
     success, message = await ContainerService.restore_database(
         db_row.container_name, db_type, db_row.database_name, 
-        db_row.username, db_row.password, backup_row.backup_path
+        db_row.username, db_row.password, snapshot_row.snapshot_path
     )
     
     if success:
@@ -947,35 +947,106 @@ async def restore_database(
     raise HTTPException(status_code=500, detail=message)
 
 
-@router.delete("/databases/{database_id}/backups/{backup_id}")
-async def delete_backup(
+@router.delete("/databases/{database_id}/snapshots/{snapshot_id}")
+async def delete_snapshot(
     database_id: int,
-    backup_id: int,
+    snapshot_id: int,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_permission("databases:write"))
 ):
     """
-    Delete a backup file.
+    Delete a snapshot file.
     """
     import os
     
     result = await db.execute(text(
-        "SELECT backup_path FROM databases_backups WHERE id = :id AND database_id = :database_id"
-    ), {"id": backup_id, "database_id": database_id})
+        "SELECT snapshot_path FROM databases_snapshots WHERE id = :id AND database_id = :database_id"
+    ), {"id": snapshot_id, "database_id": database_id})
     row = result.fetchone()
     
     if not row:
-        raise HTTPException(status_code=404, detail="Backup not found")
+        raise HTTPException(status_code=404, detail="Snapshot not found")
     
     # Delete file
-    if os.path.exists(row.backup_path):
-        os.remove(row.backup_path)
+    if os.path.exists(row.snapshot_path):
+        os.remove(row.snapshot_path)
     
     # Delete record
-    await db.execute(text("DELETE FROM databases_backups WHERE id = :id"), {"id": backup_id})
+    await db.execute(text("DELETE FROM databases_snapshots WHERE id = :id"), {"id": snapshot_id})
     await db.commit()
     
-    return {"success": True, "message": "Backup deleted"}
+    return {"success": True, "message": "Snapshot deleted"}
+
+
+@router.get("/databases/{database_id}/export")
+async def export_database(
+    database_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:read"))
+):
+    """
+    Export database to a zip file using database-specific export methods.
+    Returns a downloadable zip file.
+    """
+    import os
+    import tempfile
+    import zipfile
+    from datetime import datetime
+    from fastapi.responses import FileResponse
+    
+    result = await db.execute(text(
+        "SELECT container_name, database_type, database_name, username, password FROM databases_instances WHERE id = :id"
+    ), {"id": database_id})
+    row = result.fetchone()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Database not found")
+    
+    # Create temporary export directory
+    export_dir = tempfile.mkdtemp(prefix="flux_db_export_")
+    
+    try:
+        # Generate export filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        export_filename = f"{row.container_name}_{timestamp}.sql"
+        
+        if row.database_type == "mongodb":
+            export_filename = f"{row.container_name}_{timestamp}.archive"
+        elif row.database_type == "redis":
+            export_filename = f"{row.container_name}_{timestamp}.rdb"
+        
+        export_path = os.path.join(export_dir, export_filename)
+        
+        # Perform database export using backup method
+        db_type = DatabaseType(row.database_type)
+        success, message = await ContainerService.backup_database(
+            row.container_name, db_type, row.database_name, row.username, row.password, export_path
+        )
+        
+        if not success:
+            raise HTTPException(status_code=500, detail=message)
+        
+        # Create zip file
+        zip_filename = f"{row.container_name}_{timestamp}.zip"
+        zip_path = os.path.join(export_dir, zip_filename)
+        
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            zipf.write(export_path, os.path.basename(export_path))
+        
+        # Return zip file as download
+        return FileResponse(
+            path=zip_path,
+            media_type='application/zip',
+            filename=zip_filename,
+            headers={"Content-Disposition": f"attachment; filename={zip_filename}"}
+        )
+    
+    except Exception as e:
+        # Clean up on error
+        import shutil
+        if os.path.exists(export_dir):
+            shutil.rmtree(export_dir)
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
 
 
 @router.get("/databases/{database_id}/tables")
