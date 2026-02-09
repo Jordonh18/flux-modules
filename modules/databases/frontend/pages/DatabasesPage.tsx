@@ -65,6 +65,18 @@ interface PodmanStatus {
   message: string;
 }
 
+interface DatabaseEngine {
+  engine: string;
+  display_name: string;
+  description: string;
+  category: string;
+  default_port: number;
+  supports_databases: boolean;
+  supports_users: boolean;
+  supports_backup: boolean;
+  is_embedded: boolean;
+}
+
 interface DatabaseInfo {
   id: number;
   name: string;
@@ -92,19 +104,11 @@ interface CreateDatabaseRequest {
   tls_key?: string;
 }
 
-// Database type options
-const DATABASE_TYPES = [
-  { value: 'postgresql', label: 'PostgreSQL', icon: '🐘', description: 'Advanced open-source relational database' },
-  { value: 'mysql', label: 'MySQL', icon: '🐬', description: 'World\'s most popular open source database' },
-  { value: 'mariadb', label: 'MariaDB', icon: '🦭', description: 'Enhanced MySQL-compatible database' },
-  { value: 'mongodb', label: 'MongoDB', icon: '🍃', description: 'Document-oriented NoSQL database' },
-  { value: 'redis', label: 'Redis', icon: '🔴', description: 'In-memory data structure store' },
-];
-
 // API functions
 const databasesApi = {
   getPodmanStatus: () => api.get<PodmanStatus>('/modules/databases/podman/status').then(r => r.data),
   installPodman: () => api.post<PodmanStatus>('/modules/databases/podman/install').then(r => r.data),
+  getEngines: () => api.get<DatabaseEngine[]>('/modules/databases/engines').then(r => r.data),
   getDatabases: () => api.get<DatabaseInfo[]>('/modules/databases/databases').then(r => r.data),
   createDatabase: (data: CreateDatabaseRequest) => 
     api.post('/modules/databases/databases', data, { timeout: 360000 }).then(r => r.data), // 6 min timeout for image pulls
@@ -128,6 +132,12 @@ function DatabasesPageContent() {
     queryKey: ['databases', 'podman-status'],
     queryFn: databasesApi.getPodmanStatus,
     staleTime: 30000,
+  });
+
+  const { data: engines = [], isLoading: enginesLoading } = useQuery({
+    queryKey: ['databases', 'engines'],
+    queryFn: databasesApi.getEngines,
+    staleTime: 300000, // Cache for 5 minutes
   });
 
   const { data: databases, isLoading: databasesLoading } = useQuery({
@@ -342,8 +352,28 @@ function DatabasesPageContent() {
     }
   };
 
-  const getDatabaseTypeInfo = (type: string) => {
-    return DATABASE_TYPES.find(t => t.value === type) || { value: type, label: type, icon: '📦' };
+  const getDatabaseTypeInfo = (engineName: string) => {
+    const engine = engines.find(e => e.engine === engineName);
+    return engine ? {
+      value: engine.engine,
+      label: engine.display_name,
+      icon: getCategoryIcon(engine.category),
+      description: engine.description
+    } : { value: engineName, label: engineName, icon: '📦', description: '' };
+  };
+
+  const getCategoryIcon = (category: string) => {
+    switch (category) {
+      case 'relational': return '🐘';
+      case 'nosql': return '🍃';
+      case 'keyvalue': return '🔴';
+      case 'timeseries': return '📈';
+      case 'cache': return '⚡';
+      case 'search': return '🔍';
+      case 'graph': return '🕸️';
+      case 'message_queue': return '📬';
+      default: return '📦';
+    }
   };
 
   // Loading state
@@ -573,6 +603,7 @@ function DatabasesPageContent() {
         onOpenChange={setIsCreateModalOpen}
         onSubmit={handleCreateSubmit}
         isSubmitting={createDatabaseMutation.isPending}
+        engines={engines}
       />
     </div>
   );

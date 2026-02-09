@@ -11,20 +11,24 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { DATABASE_SKUS } from '../types/database-skus';
 
-// Copy of DATABASE_TYPES from DatabasesPage.tsx
-const DATABASE_TYPES = [
-  { value: 'postgresql', label: 'PostgreSQL', icon: '🐘', description: 'Advanced open-source relational database' },
-  { value: 'mysql', label: 'MySQL', icon: '🐬', description: 'World\'s most popular open source database' },
-  { value: 'mariadb', label: 'MariaDB', icon: '🦭', description: 'Enhanced MySQL-compatible database' },
-  { value: 'mongodb', label: 'MongoDB', icon: '🍃', description: 'Document-oriented NoSQL database' },
-  { value: 'redis', label: 'Redis', icon: '🔴', description: 'In-memory data structure store' },
-];
+interface DatabaseEngine {
+  engine: string;
+  display_name: string;
+  description: string;
+  category: string;
+  default_port: number;
+  supports_databases: boolean;
+  supports_users: boolean;
+  supports_backup: boolean;
+  is_embedded: boolean;
+}
 
 interface CreateDatabaseDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (data: any) => void; // Using any for now to match the flexible structure, but should be typed ideally
   isSubmitting?: boolean;
+  engines?: DatabaseEngine[];
 }
 
 interface FormState {
@@ -54,7 +58,7 @@ const INITIAL_FORM_STATE: FormState = {
   tlsEnabled: false,
 };
 
-export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmitting = false }: CreateDatabaseDialogProps) {
+export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmitting = false, engines = [] }: CreateDatabaseDialogProps) {
   const [formState, setFormState] = useState<FormState>(INITIAL_FORM_STATE);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -208,11 +212,11 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="max-h-[400px]">
-                  {DATABASE_TYPES.map((type) => (
-                    <SelectItem key={type.value} value={type.value}>
+                  {engines.map((engine) => (
+                    <SelectItem key={engine.engine} value={engine.engine}>
                       <div className="flex items-center gap-2">
-                        <span>{type.icon}</span>
-                        <span>{type.label}</span>
+                        <span>{getCategoryIcon(engine.category)}</span>
+                        <span>{engine.display_name}</span>
                       </div>
                     </SelectItem>
                   ))}

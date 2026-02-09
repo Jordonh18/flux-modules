@@ -60,6 +60,18 @@ import {
 } from 'recharts';
 
 // Types
+interface DatabaseEngine {
+  engine: string;
+  display_name: string;
+  description: string;
+  category: string;
+  default_port: number;
+  supports_databases: boolean;
+  supports_users: boolean;
+  supports_backup: boolean;
+  is_embedded: boolean;
+}
+
 interface DatabaseInfo {
   id: number;
   name: string;
@@ -154,13 +166,18 @@ interface MetricsResponse {
   history: MetricsPoint[];
 }
 
-// Database type options
-const DATABASE_TYPES: Record<string, { label: string; icon: string; description: string }> = {
-  postgresql: { label: 'PostgreSQL', icon: '🐘', description: 'Advanced open-source relational database' },
-  mysql: { label: 'MySQL', icon: '🐬', description: 'World\'s most popular open source database' },
-  mariadb: { label: 'MariaDB', icon: '🦭', description: 'Enhanced MySQL-compatible database' },
-  mongodb: { label: 'MongoDB', icon: '🍃', description: 'Document-oriented NoSQL database' },
-  redis: { label: 'Redis', icon: '🔴', description: 'In-memory data structure store' },
+const getCategoryIcon = (category: string) => {
+  switch (category) {
+    case 'relational': return '🐘';
+    case 'nosql': return '🍃';
+    case 'keyvalue': return '🔴';
+    case 'timeseries': return '📈';
+    case 'cache': return '⚡';
+    case 'search': return '🔍';
+    case 'graph': return '🕸️';
+    case 'message_queue': return '📬';
+    default: return '📦';
+  }
 };
 
 const chartColors = {
@@ -172,6 +189,7 @@ const chartColors = {
 
 // API functions
 const detailApi = {
+  getEngines: () => api.get<DatabaseEngine[]>('/modules/databases/engines').then(r => r.data),
   getDatabase: (id: number) => 
     api.get<DatabaseInfo[]>('/modules/databases/databases').then(r => r.data.find(d => d.id === id)),
   getStats: (id: number) => 
@@ -507,7 +525,11 @@ function DatabaseDetailPageContent() {
     toast.success(`${label} copied to clipboard`);
   };
 
-  const typeInfo = database ? DATABASE_TYPES[database.engine] || { label: database.engine, icon: '📦' } : null;
+  const typeInfo = database && engines.length > 0 ? (
+    engines.find(e => e.engine === database.engine) || 
+    { engine: database.engine, display_name: database.engine, category: 'other', description: '' }
+  ) : null;
+
   const isRunning = database?.status === 'running';
 
   if (dbLoading) {
@@ -726,7 +748,7 @@ function DatabaseDetailPageContent() {
               <CardContent className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground">Type</span>
-                  <span>{typeInfo?.label}</span>
+                  <span>{typeInfo?.display_name}</span>
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between">

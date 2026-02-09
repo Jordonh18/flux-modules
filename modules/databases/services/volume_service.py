@@ -216,7 +216,7 @@ class VolumeService:
         
         Args:
             db_name: Name of the database (container name)
-            db_type: DatabaseType enum value (MYSQL, MARIADB, POSTGRESQL, etc.)
+            db_type: Engine name (e.g., 'postgresql', 'mysql', 'redis')
         
         Returns:
             str: Path to the copied config file
@@ -235,29 +235,24 @@ class VolumeService:
         if not volume_paths:
             raise ValueError(f"Volume directory for {db_name} does not exist")
         
-        # Map database types to config file names
-        config_map = {
-            "mysql": "mysql.cnf",
-            "mariadb": "mariadb.cnf",
-            "postgresql": "postgresql.conf",
-            "mongodb": "mongod.conf",
-            "redis": "redis.conf",
-        }
-        
         # Get the database type string (handles both string and enum)
         db_type_str = db_type.value if hasattr(db_type, 'value') else str(db_type)
         
-        if db_type_str not in config_map:
-            raise ValueError(f"Unsupported database type: {db_type_str}")
+        # Get module root directory (go up from services/ to module root)
+        module_dir = Path(__file__).parent.parent
+        template_dir = module_dir / "config_templates" / db_type_str
         
-        config_filename = config_map[db_type_str]
+        if not template_dir.exists():
+            raise FileNotFoundError(f"Config template directory not found: {template_dir}")
         
-        # Get template source path (relative to this file)
-        services_dir = Path(__file__).parent
-        template_path = services_dir / "config_templates" / config_filename
+        # Find .j2 template file in the engine directory
+        template_files = list(template_dir.glob("*.j2"))
+        if not template_files:
+            raise FileNotFoundError(f"No .j2 template files found in {template_dir}")
         
-        if not template_path.exists():
-            raise FileNotFoundError(f"Config template not found: {template_path}")
+        # Use the first .j2 file found (typically there's only one per engine)
+        template_path = template_files[0]
+        config_filename = template_path.stem  # Remove .j2 extension
         
         # Copy to config directory
         config_dir = Path(volume_paths["config"])
