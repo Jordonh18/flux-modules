@@ -75,7 +75,7 @@ export default function DatabasesDetailPage() {
     queryKey: ['database', id],
     queryFn: async () => {
       const res = await api.get(`/modules/databases/databases`); // Fetch all and find, or assume dedicated endpoint if added
-      // Assuming list endpoint for now as per instructions "Fetches: /modules/databases/databases then finds by ID, OR dedicated endpoint"
+      // Assuming list endpoint for now as per instructions "Fetches: /api/modules/databases/databases then finds by ID, OR dedicated endpoint"
       // Better to check if endpoint matches ID.
       // Let's try to fetch specific ID if the API supports it, otherwise fallback to list filter.
       // PROMPT says: "Fetches: ... then finds by ID, OR dedicated endpoint"
@@ -197,7 +197,7 @@ export default function DatabasesDetailPage() {
         <Button 
           variant="ghost" 
           className="w-fit pl-0 hover:bg-transparent" 
-          onClick={() => navigate('/databases')}}
+          onClick={() => navigate('/databases')}
         >
           <ArrowLeft className="mr-2 h-4 w-4" /> Back to Databases
         </Button>

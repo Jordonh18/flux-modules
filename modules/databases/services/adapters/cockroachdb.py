@@ -31,6 +31,7 @@ class CockroachDBAdapter(BaseAdapter):
 
     engine_name = "cockroachdb"
     display_name = "CockroachDB"
+    description = "Distributed SQL database built for global scale and resilience"
     category = DatabaseCategory.RELATIONAL
     default_port = 26257
     container_image = "docker.io/cockroachdb/cockroach:latest"

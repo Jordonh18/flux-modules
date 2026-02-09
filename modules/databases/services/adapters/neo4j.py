@@ -16,6 +16,7 @@ class Neo4jAdapter(BaseAdapter):
 
     engine_name = "neo4j"
     display_name = "Neo4j 5"
+    description = "Native graph database for connected data and relationship queries"
     category = DatabaseCategory.GRAPH
     default_port = 7687  # Bolt protocol port
     container_image = "docker.io/library/neo4j:5"

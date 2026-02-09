@@ -31,6 +31,7 @@ class CouchDBAdapter(BaseAdapter):
 
     engine_name = "couchdb"
     display_name = "CouchDB 3"
+    description = "Document database with HTTP API and multi-master replication"
     category = DatabaseCategory.DOCUMENT
     default_port = 5984
     container_image = "docker.io/library/couchdb:3"

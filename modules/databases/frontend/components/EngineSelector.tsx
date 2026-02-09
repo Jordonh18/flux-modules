@@ -25,7 +25,7 @@ export function EngineSelector({ selected, onSelect }: EngineSelectorProps) {
   const { data: engines, isLoading } = useQuery<EngineInfo[]>({
     queryKey: ['database-engines'],
     queryFn: async () => {
-      const response = await api.get('/api/modules/databases/engines');
+      const response = await api.get('/modules/databases/engines');
       return response.data;
     },
   });
@@ -135,7 +135,7 @@ export function EngineSelector({ selected, onSelect }: EngineSelectorProps) {
                       <div className="mt-4">
                         <h4 className="font-semibold">{engine.display_name}</h4>
                         <p className="mt-1 text-xs text-muted-foreground">
-                          {engine.image}
+                          {engine.description}
                         </p>
                       </div>
 

@@ -139,6 +139,7 @@ class BaseAdapter(ABC):
 
     engine_name: str = ""
     display_name: str = ""
+    description: str = ""  # Short one-line description for UI
     category: DatabaseCategory = DatabaseCategory.RELATIONAL
     default_port: int = 0
     container_image: str = ""

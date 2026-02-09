@@ -16,6 +16,7 @@ class ClickHouseAdapter(BaseAdapter):
 
     engine_name = "clickhouse"
     display_name = "ClickHouse"
+    description = "Column-oriented database for blazing-fast online analytical queries"
     category = DatabaseCategory.ANALYTICAL
     default_port = 8123  # HTTP interface
     container_image = "docker.io/clickhouse/clickhouse-server:latest"

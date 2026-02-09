@@ -26,6 +26,7 @@ class MySQLAdapter(BaseAdapter):
 
     engine_name = "mysql"
     display_name = "MySQL 8.0"
+    description = "Popular open-source relational database known for reliability and ease of use"
     category = DatabaseCategory.RELATIONAL
     default_port = 3306
     container_image = "docker.io/library/mysql:8.0"

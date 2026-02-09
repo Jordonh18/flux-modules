@@ -330,19 +330,13 @@ async def install_podman():
 async def get_engines():
     """List all supported database engines from the adapter registry."""
     engines = list_engines()
-    return {
-        "engines": engines,
-        "count": len(engines)
-    }
+    return engines
 
 
 @router.get("/skus")
 async def get_skus():
     """List all available SKU definitions."""
-    return {
-        "skus": SKU_DEFINITIONS,
-        "count": len([k for k in SKU_DEFINITIONS.keys() if k != "custom"])
-    }
+    return SKU_DEFINITIONS
 
 
 @router.get("/databases", dependencies=[Depends(require_permission("databases:read"))])
@@ -363,25 +357,25 @@ async def list_databases(db: AsyncSession = Depends(get_db)):
             databases.append({
                 "id": row[0],
                 "container_id": row[1],
-                "container_name": row[2],
-                "database_type": row[3],
+                "name": row[2],              # container_name → name (frontend field)
+                "engine": row[3],             # database_type → engine (frontend field)
                 "host": row[4],
                 "port": row[5],
-                "database_name": row[6],
+                "database": row[6],           # database_name → database (frontend field)
                 "username": row[7],
                 "password": row[8],
                 "status": row[9],
                 "error_message": row[10],
-                "created_at": row[11],
+                "created_at": str(row[11]) if row[11] else None,
                 "sku": row[12],
                 "memory_limit_mb": row[13],
                 "cpu_limit": row[14],
                 "storage_limit_gb": row[15],
-                "external_access": row[16],
-                "tls_enabled": row[17]
+                "external_access": bool(row[16]) if row[16] is not None else False,
+                "tls_enabled": bool(row[17]) if row[17] is not None else False,
             })
         
-        return {"databases": databases, "count": len(databases)}
+        return databases
     except Exception as e:
         logger.error(f"Error listing databases: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -732,11 +726,7 @@ async def get_database_metrics(database_id: int, hours: int = 24, db: AsyncSessi
         collector = MetricsCollector()
         metrics = await collector.get_metrics_history(database_id, hours=hours, db=db)
         
-        return {
-            "instance_id": database_id,
-            "hours": hours,
-            "metrics": metrics
-        }
+        return metrics
         
     except Exception as e:
         logger.error(f"Error getting metrics: {e}")
@@ -882,11 +872,7 @@ async def list_snapshots(database_id: int, db: AsyncSession = Depends(get_db)):
         backup_svc = BackupService()
         snapshots = await backup_svc.list_backups(instance_id=database_id, db=db)
         
-        return {
-            "instance_id": database_id,
-            "snapshots": snapshots,
-            "count": len(snapshots)
-        }
+        return snapshots
         
     except Exception as e:
         logger.error(f"Error listing snapshots: {e}")

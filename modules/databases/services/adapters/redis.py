@@ -30,6 +30,7 @@ class RedisAdapter(BaseAdapter):
 
     engine_name = "redis"
     display_name = "Redis 7"
+    description = "In-memory data store for caching, real-time analytics, and message brokering"
     category = DatabaseCategory.KEY_VALUE
     default_port = 6379
     container_image = "docker.io/library/redis:7-alpine"

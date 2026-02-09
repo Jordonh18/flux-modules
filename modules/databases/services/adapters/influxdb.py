@@ -16,6 +16,7 @@ class InfluxDBAdapter(BaseAdapter):
 
     engine_name = "influxdb"
     display_name = "InfluxDB 2.7"
+    description = "Purpose-built time-series database for metrics, events, and IoT data"
     category = DatabaseCategory.TIME_SERIES
     default_port = 8086
     container_image = "docker.io/library/influxdb:2.7"

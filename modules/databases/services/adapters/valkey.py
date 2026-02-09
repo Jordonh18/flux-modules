@@ -21,6 +21,7 @@ class ValkeyAdapter(BaseAdapter):
     
     engine_name = "valkey"
     display_name = "Valkey"
+    description = "Open-source Redis alternative maintained by the Linux Foundation"
     category = DatabaseCategory.KEY_VALUE
     default_port = 6379
     container_image = "docker.io/valkey/valkey:latest"

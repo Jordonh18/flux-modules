@@ -16,6 +16,7 @@ class TypesenseAdapter(BaseAdapter):
 
     engine_name = "typesense"
     display_name = "Typesense"
+    description = "Fast, typo-tolerant search engine optimized for instant search"
     category = DatabaseCategory.SEARCH
     default_port = 8108
     container_image = "docker.io/typesense/typesense:latest"

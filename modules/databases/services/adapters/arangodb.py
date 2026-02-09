@@ -22,6 +22,7 @@ class ArangoDBAdapter(BaseAdapter):
     
     engine_name = "arangodb"
     display_name = "ArangoDB"
+    description = "Multi-model database supporting documents, graphs, and key-value pairs"
     category = DatabaseCategory.DOCUMENT
     default_port = 8529
     container_image = "docker.io/arangodb:latest"

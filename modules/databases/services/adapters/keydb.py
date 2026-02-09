@@ -21,6 +21,7 @@ class KeyDBAdapter(BaseAdapter):
     
     engine_name = "keydb"
     display_name = "KeyDB"
+    description = "Multi-threaded Redis-compatible in-memory database with higher throughput"
     category = DatabaseCategory.KEY_VALUE
     default_port = 6379
     container_image = "docker.io/eqalpha/keydb:latest"

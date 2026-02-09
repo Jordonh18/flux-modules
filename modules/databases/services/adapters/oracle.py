@@ -32,6 +32,7 @@ class OracleAdapter(BaseAdapter):
 
     engine_name = "oracle"
     display_name = "Oracle XE 21c"
+    description = "Enterprise relational database with comprehensive SQL and PL/SQL support"
     category = DatabaseCategory.RELATIONAL
     default_port = 1521
     container_image = "container-registry.oracle.com/database/express:21.3.0-xe"

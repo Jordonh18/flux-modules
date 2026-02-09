@@ -16,6 +16,7 @@ class DuckDBAdapter(BaseAdapter):
 
     engine_name = "duckdb"
     display_name = "DuckDB"
+    description = "Embedded analytical database optimized for fast OLAP workloads"
     category = DatabaseCategory.ANALYTICAL
     default_port = 0  # No network port - embedded mode
     container_image = ""  # No container for embedded databases

@@ -40,20 +40,8 @@ import {
   Play
 } from 'lucide-react';
 
-import { DatabaseInstance, EngineInfo, CreateDatabaseRequest, ENGINE_ICONS } from '../types/database';
+import { DatabaseInstance, EngineInfo, ENGINE_ICONS } from '../types/database';
 import { HealthBadge } from '../components/HealthBadge';
-import { EngineSelector } from '../components/EngineSelector';
-import { SkuSelector } from '../components/SkuSelector';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
-import { Checkbox } from '@/components/ui/checkbox';
 
 export default function DatabasesPage() {
   useDocumentTitle('Databases');
@@ -61,14 +49,6 @@ export default function DatabasesPage() {
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState('');
   const [engineFilter, setEngineFilter] = useState<string>('all');
-  const [createOpen, setCreateOpen] = useState(false);
-  const [createStep, setCreateStep] = useState(1);
-  const [createForm, setCreateForm] = useState<Partial<CreateDatabaseRequest>>({
-    sku: 'd2',
-    database_name: 'app',
-    external_access: false,
-    tls_enabled: false,
-  });
 
   // --- Queries ---
 
@@ -145,24 +125,6 @@ export default function DatabasesPage() {
     onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to delete database'),
   });
 
-  const createMutation = useMutation({
-    mutationFn: (data: CreateDatabaseRequest) => api.post('/modules/databases/databases', data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['databases'] });
-      toast.success('Database creation started');
-      setCreateOpen(false);
-    },
-    onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to create database'),
-  });
-
-  const handleCreate = () => {
-    if (!createForm.engine || !createForm.name || !createForm.database_name || !createForm.sku) {
-      toast.error('Missing required fields');
-      return;
-    }
-    createMutation.mutate(createForm as CreateDatabaseRequest);
-  };
-
   // --- Filter Logic ---
 
   const filteredDatabases = databases?.filter((db) => {
@@ -197,7 +159,7 @@ export default function DatabasesPage() {
             Manage your database instances and clusters.
           </p>
         </div>
-        <Button onClick={() => { setCreateOpen(true); setCreateStep(1); setCreateForm({ sku: 'd2', database_name: 'app', external_access: false, tls_enabled: false }); }}>
+        <Button onClick={() => navigate('/databases/create')}>
           <Plus className="mr-2 h-4 w-4" /> Create Database
         </Button>
       </div>
@@ -205,11 +167,10 @@ export default function DatabasesPage() {
       {showPodmanWarning && (
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Container Engine Issue</AlertTitle>
+          <AlertTitle>Service Unavailable</AlertTitle>
           <AlertDescription>
-            Podman is not {podmanStatus?.installed ? 'running' : 'installed'}. 
-            Database functionality requires Podman to be active on the host.
-            {!podmanStatus?.installed && " Please install 'podman' and 'aardvark-dns'."}
+            The database provisioning service is not {podmanStatus?.installed ? 'running' : 'available'}. 
+            Database functionality requires the provisioning engine to be active.
           </AlertDescription>
         </Alert>
       )}
@@ -346,105 +307,6 @@ export default function DatabasesPage() {
           </div>
         </CardContent>
       </Card>
-
-      {/* Create Database Dialog */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Create Database</DialogTitle>
-            <DialogDescription>
-              {createStep === 1 && 'Select a database engine'}
-              {createStep === 2 && 'Configure your instance'}
-              {createStep === 3 && 'Review and create'}
-            </DialogDescription>
-          </DialogHeader>
-
-          {createStep === 1 && (
-            <EngineSelector
-              selected={createForm.engine || ''}
-              onSelect={(engine) => setCreateForm(prev => ({ ...prev, engine }))}
-            />
-          )}
-
-          {createStep === 2 && (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="name">Instance Name</Label>
-                <Input
-                  id="name"
-                  placeholder="my-database"
-                  value={createForm.name || ''}
-                  onChange={(e) => setCreateForm(prev => ({ ...prev, name: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="database_name">Database Name</Label>
-                <Input
-                  id="database_name"
-                  placeholder="app"
-                  value={createForm.database_name || 'app'}
-                  onChange={(e) => setCreateForm(prev => ({ ...prev, database_name: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>SKU Tier</Label>
-                <SkuSelector
-                  selected={createForm.sku || 'd2'}
-                  onSelect={(sku) => setCreateForm(prev => ({ ...prev, sku }))}
-                />
-              </div>
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="external_access"
-                  checked={createForm.external_access || false}
-                  onCheckedChange={(checked) => setCreateForm(prev => ({ ...prev, external_access: !!checked }))}
-                />
-                <Label htmlFor="external_access">Enable external access</Label>
-              </div>
-            </div>
-          )}
-
-          {createStep === 3 && (
-            <div className="space-y-3 text-sm">
-              <div className="grid grid-cols-2 gap-2">
-                <span className="text-muted-foreground">Engine:</span>
-                <span className="font-medium">{ENGINE_ICONS[createForm.engine || ''] || '💾'} {createForm.engine}</span>
-                <span className="text-muted-foreground">Instance Name:</span>
-                <span className="font-medium">{createForm.name}</span>
-                <span className="text-muted-foreground">Database Name:</span>
-                <span className="font-medium">{createForm.database_name}</span>
-                <span className="text-muted-foreground">SKU:</span>
-                <span className="font-medium uppercase">{createForm.sku}</span>
-                <span className="text-muted-foreground">External Access:</span>
-                <span className="font-medium">{createForm.external_access ? 'Yes' : 'No'}</span>
-              </div>
-            </div>
-          )}
-
-          <DialogFooter className="gap-2">
-            {createStep > 1 && (
-              <Button variant="outline" onClick={() => setCreateStep(s => s - 1)}>Back</Button>
-            )}
-            {createStep < 3 ? (
-              <Button onClick={() => {
-                if (createStep === 1 && !createForm.engine) {
-                  toast.error('Please select an engine');
-                  return;
-                }
-                if (createStep === 2 && !createForm.name) {
-                  toast.error('Instance name is required');
-                  return;
-                }
-                setCreateStep(s => s + 1);
-              }}>Next</Button>
-            ) : (
-              <Button onClick={handleCreate} disabled={createMutation.isPending}>
-                {createMutation.isPending ? 'Creating...' : 'Create Database'}
-              </Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

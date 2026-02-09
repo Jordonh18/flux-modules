@@ -5,9 +5,9 @@ export type DatabaseEngine = string; // Dynamic from adapter registry
 export interface EngineInfo {
   engine: string;
   display_name: string;
+  description: string;
   category: 'relational' | 'document' | 'key_value' | 'wide_column' | 'time_series' | 'search' | 'graph' | 'analytical' | 'embedded';
   default_port: number;
-  image: string;
   supports_databases: boolean;
   supports_users: boolean;
   supports_backup: boolean;

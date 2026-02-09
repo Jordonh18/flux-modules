@@ -23,6 +23,7 @@ class MeilisearchAdapter(BaseAdapter):
 
     engine_name = "meilisearch"
     display_name = "Meilisearch"
+    description = "Lightning-fast, typo-tolerant search engine for great search experiences"
     category = DatabaseCategory.SEARCH
     default_port = 7700
     container_image = "docker.io/getmeili/meilisearch:latest"

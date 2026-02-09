@@ -19,6 +19,7 @@ class MariaDBAdapter(BaseAdapter):
 
     engine_name = "mariadb"
     display_name = "MariaDB 11"
+    description = "Community-developed fork of MySQL with enhanced performance and features"
     category = DatabaseCategory.RELATIONAL
     default_port = 3306
     container_image = "docker.io/library/mariadb:11"

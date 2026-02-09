@@ -16,6 +16,7 @@ class H2Adapter(BaseAdapter):
 
     engine_name = "h2"
     display_name = "H2 Database"
+    description = "Lightweight embedded relational database with a fast SQL engine"
     category = DatabaseCategory.EMBEDDED
     default_port = 9092  # TCP server mode port
     container_image = ""  # No standard container for H2

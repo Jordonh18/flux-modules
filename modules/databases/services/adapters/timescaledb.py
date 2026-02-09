@@ -23,6 +23,7 @@ class TimescaleDBAdapter(BaseAdapter):
 
     engine_name = "timescaledb"
     display_name = "TimescaleDB"
+    description = "PostgreSQL extension optimized for time-series data at scale"
     category = DatabaseCategory.TIME_SERIES
     default_port = 5432
     container_image = "docker.io/timescale/timescaledb:latest-pg16"

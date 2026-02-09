@@ -19,6 +19,7 @@ class MSSQLAdapter(BaseAdapter):
 
     engine_name = "mssql"
     display_name = "SQL Server 2022"
+    description = "Enterprise-grade relational database with advanced analytics and security"
     category = DatabaseCategory.RELATIONAL
     default_port = 1433
     container_image = "mcr.microsoft.com/mssql/server:2022-latest"

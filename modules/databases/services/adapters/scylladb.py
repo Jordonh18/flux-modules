@@ -16,6 +16,7 @@ class ScyllaDBAdapter(BaseAdapter):
 
     engine_name = "scylladb"
     display_name = "ScyllaDB"
+    description = "High-performance Cassandra-compatible wide-column database"
     category = DatabaseCategory.WIDE_COLUMN
     default_port = 9042
     container_image = "docker.io/scylladb/scylla:latest"

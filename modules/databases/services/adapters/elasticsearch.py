@@ -29,6 +29,7 @@ class ElasticsearchAdapter(BaseAdapter):
 
     engine_name = "elasticsearch"
     display_name = "Elasticsearch 8.11"
+    description = "Distributed search and analytics engine for all types of data"
     category = DatabaseCategory.SEARCH
     default_port = 9200
     container_image = "docker.elastic.co/elasticsearch/elasticsearch:8.11.0"

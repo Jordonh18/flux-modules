@@ -26,6 +26,7 @@ class MongoDBAdapter(BaseAdapter):
 
     engine_name = "mongodb"
     display_name = "MongoDB 7"
+    description = "Leading NoSQL document database for flexible, JSON-like data models"
     category = DatabaseCategory.DOCUMENT
     default_port = 27017
     container_image = "docker.io/library/mongo:7"

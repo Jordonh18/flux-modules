@@ -16,6 +16,7 @@ class JanusGraphAdapter(BaseAdapter):
 
     engine_name = "janusgraph"
     display_name = "JanusGraph"
+    description = "Scalable distributed graph database for traversing billions of relationships"
     category = DatabaseCategory.GRAPH
     default_port = 8182  # Gremlin Server port
     container_image = "docker.io/janusgraph/janusgraph:latest"

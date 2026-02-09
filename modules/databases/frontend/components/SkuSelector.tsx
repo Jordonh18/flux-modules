@@ -28,7 +28,7 @@ export function SkuSelector({ selected, onSelect }: SkuSelectorProps) {
   const { data: systemInfo, isLoading } = useQuery<SystemInfo>({
     queryKey: ['system-info'],
     queryFn: async () => {
-      const response = await api.get('/api/modules/databases/system-info');
+      const response = await api.get('/modules/databases/system-info');
       // Fallback/transform if needed, but assuming direct match for now
       return response.data;
     },
@@ -43,7 +43,7 @@ export function SkuSelector({ selected, onSelect }: SkuSelectorProps) {
     // Sort logic to put smaller/cheaper SKUs first
     const sortedSkus = [...DATABASE_SKUS].sort((a, b) => {
       if (a.series !== b.series) return a.series.localeCompare(b.series);
-      return a.cpu_limit - b.cpu_limit || a.memory_limit_mb - b.memory_limit_mb;
+      return a.cpus - b.cpus || a.memoryMb - b.memoryMb;
     });
 
     sortedSkus.forEach((sku) => {
@@ -59,9 +59,9 @@ export function SkuSelector({ selected, onSelect }: SkuSelectorProps) {
   const getSeriesColor = (series: string) => {
     switch (series.toLowerCase()) {
       case 'burstable': return 'text-orange-500 border-orange-500/20 bg-orange-500/10';
-      case 'general purpose': return 'text-blue-500 border-blue-500/20 bg-blue-500/10';
-      case 'memory optimized': return 'text-purple-500 border-purple-500/20 bg-purple-500/10';
-      case 'compute optimized': return 'text-red-500 border-red-500/20 bg-red-500/10';
+      case 'general': return 'text-blue-500 border-blue-500/20 bg-blue-500/10';
+      case 'memory': return 'text-purple-500 border-purple-500/20 bg-purple-500/10';
+      case 'compute': return 'text-red-500 border-red-500/20 bg-red-500/10';
       default: return 'text-gray-500 border-gray-500/20 bg-gray-500/10';
     }
   };
@@ -69,11 +69,11 @@ export function SkuSelector({ selected, onSelect }: SkuSelectorProps) {
   const isSkuCompatible = (sku: DatabaseSku): { compatible: boolean; reason?: string } => {
     if (!systemInfo) return { compatible: true }; // Assume compatible if check fails
 
-    if (sku.memory_limit_mb > systemInfo.total_memory_mb) {
+    if (sku.memoryMb > systemInfo.total_memory_mb) {
       return { compatible: false, reason: `Exceeds system memory (${Math.round(systemInfo.total_memory_mb / 1024)}GB)` };
     }
     
-    if (sku.cpu_limit > systemInfo.cpu_cores) {
+    if (sku.cpus > systemInfo.cpu_cores) {
       return { compatible: false, reason: `Exceeds system CPUs (${systemInfo.cpu_cores} cores)` };
     }
 
@@ -138,16 +138,16 @@ export function SkuSelector({ selected, onSelect }: SkuSelectorProps) {
                       <div className="mt-4 grid grid-cols-2 gap-y-2 text-sm">
                         <div className="flex items-center gap-1.5 text-muted-foreground">
                           <Cpu className="h-3.5 w-3.5" />
-                          <span className="font-medium text-foreground">{sku.cpu_limit} vCPU</span>
+                          <span className="font-medium text-foreground">{sku.cpus} vCPU</span>
                         </div>
                         <div className="flex items-center gap-1.5 text-muted-foreground">
                           <Server className="h-3.5 w-3.5" />
-                          <span className="font-medium text-foreground">{sku.memory_limit_mb / 1024} GB</span>
+                          <span className="font-medium text-foreground">{sku.memoryMb / 1024} GB</span>
                         </div>
                         <div className="flex items-center gap-1.5 text-muted-foreground col-span-2">
                            <HardDrive className="h-3.5 w-3.5" />
                            <span className="font-medium text-foreground">
-                             {sku.storage_limit_gb ? `${sku.storage_limit_gb} GB Storage` : 'Unlimited Storage'}
+                             {sku.storageGb ? `${sku.storageGb} GB Storage` : 'Unlimited Storage'}
                            </span>
                         </div>
                       </div>

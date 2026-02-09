@@ -23,6 +23,7 @@ class QuestDBAdapter(BaseAdapter):
 
     engine_name = "questdb"
     display_name = "QuestDB"
+    description = "High-performance time-series database with SQL support"
     category = DatabaseCategory.TIME_SERIES
     default_port = 9000
     container_image = "docker.io/questdb/questdb:latest"

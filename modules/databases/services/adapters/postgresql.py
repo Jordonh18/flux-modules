@@ -26,6 +26,7 @@ class PostgreSQLAdapter(BaseAdapter):
 
     engine_name = "postgresql"
     display_name = "PostgreSQL 16"
+    description = "Advanced open-source relational database with ACID compliance and extensive SQL support"
     category = DatabaseCategory.RELATIONAL
     default_port = 5432
     container_image = "docker.io/library/postgres:16-alpine"

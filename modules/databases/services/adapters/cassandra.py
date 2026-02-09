@@ -16,6 +16,7 @@ class CassandraAdapter(BaseAdapter):
 
     engine_name = "cassandra"
     display_name = "Apache Cassandra 5"
+    description = "Highly scalable distributed database for large-scale structured data"
     category = DatabaseCategory.WIDE_COLUMN
     default_port = 9042
     container_image = "docker.io/library/cassandra:5"

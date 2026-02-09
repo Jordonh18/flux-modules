@@ -93,9 +93,9 @@ def list_engines() -> list[dict]:
         engines.append({
             "engine": name,
             "display_name": adapter.display_name,
+            "description": adapter.description,
             "category": adapter.category.value,
             "default_port": adapter.default_port,
-            "image": adapter.container_image,
             "supports_databases": adapter.supports_databases,
             "supports_users": adapter.supports_users,
             "supports_backup": adapter.supports_backup,
