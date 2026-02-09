@@ -1,312 +1,583 @@
-import { useState } from 'react';
+/**
+ * Databases Module - Database Page
+ *
+ * Full-featured database management page for Flux.
+ * Supports creating managed PostgreSQL, MySQL, MariaDB, MongoDB, and Redis databases.
+ */
+
+import { memo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
-import { useDocumentTitle } from '@/hooks/use-document-title';
-import { toast } from 'sonner';
-
+import { cn } from '@/lib/utils';
+import { Card, CardContent } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
-import { Skeleton } from '@/components/ui/skeleton';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  AlertCircle,
+  Copy,
+  Database,
+  Download,
+  ExternalLink,
+  Loader2,
   MoreHorizontal,
+  Play,
   Plus,
-  Search,
   RefreshCw,
-  Power,
-  RotateCw,
+  Square,
   Trash2,
-  Database as DatabaseIcon,
-  AlertTriangle,
-  Server,
-  Play
+  Eye,
+  EyeOff,
 } from 'lucide-react';
+import { useDocumentTitle } from '@/hooks/use-document-title';
+import { toast } from 'sonner';
+import { CreateDatabaseDialog } from '../components/CreateDatabaseDialog';
 
-import { DatabaseInstance, EngineInfo, ENGINE_ICONS } from '../types/database';
-import { HealthBadge } from '../components/HealthBadge';
+// Types
+interface PodmanStatus {
+  installed: boolean;
+  version: string | null;
+  message: string;
+}
 
-export default function DatabasesPage() {
+interface DatabaseInfo {
+  id: number;
+  name: string;
+  type: string;
+  status: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  created_at: string;
+}
+
+interface CreateDatabaseRequest {
+  type: string;
+  name?: string;
+  database_name: string;
+  sku?: string;
+  memory_limit_mb?: number;
+  cpu_limit?: number;
+  storage_limit_gb?: number;
+  external_access?: boolean;
+  tls_enabled?: boolean;
+  tls_cert?: string;
+  tls_key?: string;
+}
+
+// Database type options
+const DATABASE_TYPES = [
+  { value: 'postgresql', label: 'PostgreSQL', icon: '🐘', description: 'Advanced open-source relational database' },
+  { value: 'mysql', label: 'MySQL', icon: '🐬', description: 'World\'s most popular open source database' },
+  { value: 'mariadb', label: 'MariaDB', icon: '🦭', description: 'Enhanced MySQL-compatible database' },
+  { value: 'mongodb', label: 'MongoDB', icon: '🍃', description: 'Document-oriented NoSQL database' },
+  { value: 'redis', label: 'Redis', icon: '🔴', description: 'In-memory data structure store' },
+];
+
+// API functions
+const databasesApi = {
+  getPodmanStatus: () => api.get<PodmanStatus>('/modules/databases/podman/status').then(r => r.data),
+  installPodman: () => api.post<PodmanStatus>('/modules/databases/podman/install').then(r => r.data),
+  getDatabases: () => api.get<DatabaseInfo[]>('/modules/databases/databases').then(r => r.data),
+  createDatabase: (data: CreateDatabaseRequest) => 
+    api.post('/modules/databases/databases', data, { timeout: 360000 }).then(r => r.data), // 6 min timeout for image pulls
+  startDatabase: (id: number) => api.post(`/modules/databases/databases/${id}/start`).then(r => r.data),
+  stopDatabase: (id: number) => api.post(`/modules/databases/databases/${id}/stop`).then(r => r.data),
+  restartDatabase: (id: number) => api.post(`/modules/databases/databases/${id}/restart`).then(r => r.data),
+  deleteDatabase: (id: number) => api.delete(`/modules/databases/databases/${id}`).then(r => r.data),
+};
+
+function DatabasesPageContent() {
   useDocumentTitle('Databases');
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [searchTerm, setSearchTerm] = useState('');
-  const [engineFilter, setEngineFilter] = useState<string>('all');
+  const navigate = useNavigate();
+  
+  // Modal states
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [showPassword, setShowPassword] = useState<number | null>(null);
 
-  // --- Queries ---
+  // Queries
+  const { data: podmanStatus, isLoading: podmanLoading } = useQuery({
+    queryKey: ['databases', 'podman-status'],
+    queryFn: databasesApi.getPodmanStatus,
+    staleTime: 30000,
+  });
 
-  const { data: podmanStatus, isLoading: isPodmanLoading } = useQuery({
-    queryKey: ['podman-status'],
-    queryFn: async () => {
-      try {
-        const res = await api.get('/modules/databases/podman/status');
-        return res.data;
-      } catch (err) {
-        return { installed: false, running: false, version: '' };
+  const { data: databases, isLoading: databasesLoading } = useQuery({
+    queryKey: ['databases', 'list'],
+    queryFn: databasesApi.getDatabases,
+    enabled: podmanStatus?.installed === true,
+    refetchInterval: 3000, // Refresh every 3s to update status
+  });
+
+  // Mutations
+  const installPodmanMutation = useMutation({
+    mutationFn: databasesApi.installPodman,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['databases', 'podman-status'] });
+      toast.success('Podman installed successfully');
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.detail || 'Failed to install Podman');
+    },
+  });
+
+  const createDatabaseMutation = useMutation({
+    mutationFn: databasesApi.createDatabase,
+    onMutate: async (newDatabase) => {
+      // Close modal immediately
+      setIsCreateModalOpen(false);
+      
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['databases', 'list'] });
+      
+      // Snapshot previous value
+      const previousDatabases = queryClient.getQueryData<DatabaseInfo[]>(['databases', 'list']);
+      
+      // Optimistically add the database with "creating" status
+      queryClient.setQueryData<DatabaseInfo[]>(['databases', 'list'], (old) => {
+        if (!old) return old;
+        
+        // Create temporary database entry
+        const tempDatabase: DatabaseInfo = {
+          id: Date.now(), // Temporary ID
+          name: newDatabase.name || `${newDatabase.type}-db`,
+          type: newDatabase.type,
+          status: 'creating',
+          host: 'localhost',
+          port: 0,
+          database: newDatabase.database_name,
+          username: 'creating...',
+          password: '',
+          created_at: new Date().toISOString(),
+        };
+        
+        return [tempDatabase, ...old];
+      });
+      
+      // Return context for rollback
+      return { previousDatabases };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['databases', 'list'] });
+    },
+    onError: (err: any, _variables, context) => {
+      // Rollback on error
+      if (context?.previousDatabases) {
+        queryClient.setQueryData(['databases', 'list'], context.previousDatabases);
       }
+      toast.error(err.response?.data?.detail || err.message || 'Failed to create database');
     },
   });
 
-  const { data: databases, isLoading: isDatabasesLoading } = useQuery<DatabaseInstance[]>({
-    queryKey: ['databases'],
-    queryFn: async () => {
-      const res = await api.get('/modules/databases/databases');
-      return res.data;
+  const startDatabaseMutation = useMutation({
+    mutationFn: databasesApi.startDatabase,
+    onMutate: async (databaseId) => {
+      await queryClient.cancelQueries({ queryKey: ['databases', 'list'] });
+      const previousDatabases = queryClient.getQueryData<DatabaseInfo[]>(['databases', 'list']);
+      
+      queryClient.setQueryData<DatabaseInfo[]>(['databases', 'list'], (old) => {
+        if (!old) return old;
+        return old.map(db => 
+          db.id === databaseId ? { ...db, status: 'starting' } : db
+        );
+      });
+      
+      toast.info('Starting database...');
+      return { previousDatabases };
     },
-    refetchInterval: (query) => {
-      // Poll if any database is creating or stopping
-      const isTransitional = query.state.data?.some((db) => 
-        ['creating', 'stopping', 'starting'].includes(db.status)
-      );
-      return isTransitional ? 2000 : 10000;
+    onError: (_err, _variables, context) => {
+      if (context?.previousDatabases) {
+        queryClient.setQueryData(['databases', 'list'], context.previousDatabases);
+      }
+      toast.error('Failed to start database');
     },
-  });
-
-  const { data: engines } = useQuery<EngineInfo[]>({
-    queryKey: ['database-engines'],
-    queryFn: async () => {
-      const res = await api.get('/modules/databases/engines');
-      return res.data;
-    },
-  });
-
-  // --- Mutations ---
-
-  const startMutation = useMutation({
-    mutationFn: (id: number) => api.post(`/modules/databases/databases/${id}/start`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['databases'] });
-      toast.success('Database starting...');
+      toast.success('Database started');
     },
-    onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to start database'),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['databases'] });
+    },
   });
 
-  const stopMutation = useMutation({
-    mutationFn: (id: number) => api.post(`/modules/databases/databases/${id}/stop`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['databases'] });
-      toast.success('Database stopping...');
+  const stopDatabaseMutation = useMutation({
+    mutationFn: databasesApi.stopDatabase,
+    onMutate: async (databaseId) => {
+      await queryClient.cancelQueries({ queryKey: ['databases', 'list'] });
+      const previousDatabases = queryClient.getQueryData<DatabaseInfo[]>(['databases', 'list']);
+      
+      queryClient.setQueryData<DatabaseInfo[]>(['databases', 'list'], (old) => {
+        if (!old) return old;
+        return old.map(db => 
+          db.id === databaseId ? { ...db, status: 'stopping' } : db
+        );
+      });
+      
+      toast.info('Stopping database...');
+      return { previousDatabases };
     },
-    onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to stop database'),
+    onError: (_err, _variables, context) => {
+      if (context?.previousDatabases) {
+        queryClient.setQueryData(['databases', 'list'], context.previousDatabases);
+      }
+      toast.error('Failed to stop database');
+    },
+    onSuccess: () => {
+      toast.success('Database stopped');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['databases'] });
+    },
   });
 
-  const restartMutation = useMutation({
-    mutationFn: (id: number) => api.post(`/modules/databases/databases/${id}/restart`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['databases'] });
-      toast.success('Database restarting...');
+  const restartDatabaseMutation = useMutation({
+    mutationFn: databasesApi.restartDatabase,
+    onMutate: async (databaseId) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['databases', 'list'] });
+      
+      // Snapshot previous value
+      const previousDatabases = queryClient.getQueryData<DatabaseInfo[]>(['databases', 'list']);
+      
+      // Optimistically update to "restarting" status
+      queryClient.setQueryData<DatabaseInfo[]>(['databases', 'list'], (old) => {
+        if (!old) return old;
+        return old.map(db => 
+          db.id === databaseId ? { ...db, status: 'restarting' } : db
+        );
+      });
+      
+      toast.info('Restarting database...');
+      
+      // Return context for rollback
+      return { previousDatabases };
     },
-    onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to restart database'),
+    onError: (_err, _variables, context) => {
+      // Rollback on error
+      if (context?.previousDatabases) {
+        queryClient.setQueryData(['databases', 'list'], context.previousDatabases);
+      }
+      toast.error('Failed to restart database');
+    },
+    onSuccess: () => {
+      toast.success('Database restarted');
+    },
+    onSettled: () => {
+      // Refetch to ensure we have accurate data
+      queryClient.invalidateQueries({ queryKey: ['databases'] });
+    },
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: number) => api.delete(`/modules/databases/databases/${id}`),
+  const deleteDatabaseMutation = useMutation({
+    mutationFn: databasesApi.deleteDatabase,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['databases'] });
+      queryClient.invalidateQueries({ queryKey: ['databases', 'list'] });
       toast.success('Database deleted');
     },
-    onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to delete database'),
+    onError: () => toast.error('Failed to delete database'),
   });
 
-  // --- Filter Logic ---
+  // Handlers
+  const handleCreateSubmit = (data: CreateDatabaseRequest) => {
+    createDatabaseMutation.mutate(data);
+  };
 
-  const filteredDatabases = databases?.filter((db) => {
-    const matchesSearch = 
-      db.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      db.database.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      db.engine.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesEngine = engineFilter === 'all' || db.engine === engineFilter;
-    
-    return matchesSearch && matchesEngine;
-  });
+  const handleDeleteDatabase = (db: DatabaseInfo) => {
+    if (confirm(`Are you sure you want to delete "${db.name}"? This will stop the container and remove all data.`)) {
+      deleteDatabaseMutation.mutate(db.id);
+    }
+  };
 
-  // --- Render ---
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success(`${label} copied to clipboard`);
+  };
 
-  if (isPodmanLoading) {
-    return <div className="p-8 space-y-4">
-      <Skeleton className="h-12 w-full" />
-      <Skeleton className="h-64 w-full" />
-    </div>;
+  const getStatusBadgeClass = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'running':
+        return 'status-badge-running';
+      case 'stopped':
+      case 'exited':
+        return 'status-badge-stopped';
+      case 'creating':
+        return 'status-badge-creating';
+      case 'starting':
+        return 'status-badge-starting';
+      case 'stopping':
+        return 'status-badge-stopping';
+      case 'restarting':
+        return 'status-badge-restarting';
+      case 'error':
+        return 'status-badge-error';
+      default:
+        return 'status-badge-default';
+    }
+  };
+
+  const getDatabaseTypeInfo = (type: string) => {
+    return DATABASE_TYPES.find(t => t.value === type) || { value: type, label: type, icon: '📦' };
+  };
+
+  // Loading state
+  if (podmanLoading) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
   }
-
-  // Not strictly preventing access, but showing a big warning
-  const showPodmanWarning = podmanStatus && (!podmanStatus.installed || !podmanStatus.running);
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      {/* Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Databases</h1>
-          <p className="text-muted-foreground mt-1">
-            Manage your database instances and clusters.
-          </p>
+          <h1 className="text-2xl font-bold">Databases</h1>
+          <p className="text-muted-foreground">Manage database instances</p>
         </div>
-        <Button onClick={() => navigate('/databases/create')}>
-          <Plus className="mr-2 h-4 w-4" /> Create Database
-        </Button>
+        {podmanStatus?.installed && (
+          <Button 
+            onClick={() => setIsCreateModalOpen(true)}
+            disabled={createDatabaseMutation.isPending}
+          >
+            {createDatabaseMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Create Database
+          </Button>
+        )}
       </div>
 
-      {showPodmanWarning && (
-        <Alert variant="destructive">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Service Unavailable</AlertTitle>
-          <AlertDescription>
-            The database provisioning service is not {podmanStatus?.installed ? 'running' : 'available'}. 
-            Database functionality requires the provisioning engine to be active.
-          </AlertDescription>
-        </Alert>
-      )}
-
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex flex-col sm:flex-row justify-between gap-4">
-            <CardTitle>Instances</CardTitle>
-            <div className="flex items-center gap-2">
-              <div className="relative w-full sm:w-64">
-                <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search instances..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-8"
-                />
+      {/* Podman Status Alert */}
+      {!podmanStatus?.installed && (
+        <Card className="border-amber-500/50 bg-amber-500/10">
+          <CardContent className="flex items-center justify-between p-4">
+            <div className="flex items-center gap-3">
+              <AlertCircle className="h-5 w-5 text-amber-500" />
+              <div>
+                <p className="font-medium">Podman Required</p>
+                <p className="text-sm text-muted-foreground">
+                  Podman is required to run databases. Install it to get started.
+                </p>
               </div>
             </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="rounded-md border">
+            <Button
+              onClick={() => installPodmanMutation.mutate()}
+              disabled={installPodmanMutation.isPending}
+            >
+              {installPodmanMutation.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="mr-2 h-4 w-4" />
+              )}
+              Install Podman
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+
+      {/* Databases Table */}
+      {podmanStatus?.installed && (
+        <Card className="gap-0 py-0">
+          <CardContent className="p-0">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Instance Name</TableHead>
-                  <TableHead>Engine</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Connection</TableHead>
-                  <TableHead>SKU</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead className="px-4">Database</TableHead>
+                  <TableHead className="px-4">Type</TableHead>
+                  <TableHead className="px-4">Status</TableHead>
+                  <TableHead className="px-4">Connection</TableHead>
+                  <TableHead className="px-4">Credentials</TableHead>
+                  <TableHead className="px-4 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {isDatabasesLoading ? (
-                  // Loading Skeletons
-                  Array.from({ length: 3 }).map((_, i) => (
-                    <TableRow key={i}>
-                      <TableCell><Skeleton className="h-6 w-32" /></TableCell>
-                      <TableCell><Skeleton className="h-6 w-20" /></TableCell>
-                      <TableCell><Skeleton className="h-6 w-24" /></TableCell>
-                      <TableCell><Skeleton className="h-6 w-32" /></TableCell>
-                      <TableCell><Skeleton className="h-6 w-16" /></TableCell>
-                      <TableCell><Skeleton className="h-8 w-8 ml-auto" /></TableCell>
-                    </TableRow>
-                  ))
-                ) : filteredDatabases?.length === 0 ? (
+                {databasesLoading ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
-                      No databases found. Create one to get started.
+                    <TableCell className="px-4 text-center" colSpan={6}>
+                      <Loader2 className="mx-auto h-5 w-5 animate-spin" />
+                    </TableCell>
+                  </TableRow>
+                ) : databases?.length === 0 ? (
+                  <TableRow>
+                    <TableCell className="px-4 text-center text-muted-foreground" colSpan={6}>
+                      <div className="py-8">
+                        <Database className="mx-auto h-10 w-10 text-muted-foreground/50 mb-2" />
+                        <p>No databases yet</p>
+                        <p className="text-sm">Click "Create Database" to get started</p>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredDatabases?.map((db) => (
-                    <TableRow 
-                      key={db.id} 
-                      className="cursor-pointer hover:bg-muted/50"
-                      onClick={() => navigate(`/databases/${db.id}`)}
-                    >
-                      <TableCell className="font-medium">
-                        <div className="flex flex-col">
-                          <span>{db.name}</span>
-                          <span className="text-xs text-muted-foreground">Created {new Date(db.created_at).toLocaleDateString()}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xl">{ENGINE_ICONS[db.engine] || '💾'}</span>
-                          <span className="capitalize">{db.engine}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <HealthBadge status={db.status} />
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1 text-sm font-mono text-muted-foreground">
-                          <Server className="h-3 w-3" />
-                          {db.host}:{db.port}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-secondary text-secondary-foreground">
-                          {db.sku?.toUpperCase() || 'CUSTOM'}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                            <Button variant="ghost" className="h-8 w-8 p-0">
-                              <span className="sr-only">Open menu</span>
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                            <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                            <DropdownMenuItem onClick={() => navigate(`/databases/${db.id}`)}>
-                              View Details
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            {db.status === 'running' ? (
-                              <>
-                                <DropdownMenuItem onClick={() => restartMutation.mutate(db.id)}>
-                                  <RotateCw className="mr-2 h-4 w-4" /> Restart
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => stopMutation.mutate(db.id)} className="text-amber-500">
-                                  <Power className="mr-2 h-4 w-4" /> Stop
-                                </DropdownMenuItem>
-                              </>
-                            ) : (
-                              <DropdownMenuItem onClick={() => startMutation.mutate(db.id)} className="text-green-500">
-                                <Play className="mr-2 h-4 w-4" /> Start
-                              </DropdownMenuItem>
+                  databases?.map((db) => {
+                    const typeInfo = getDatabaseTypeInfo(db.type);
+                    return (
+                      <TableRow 
+                        key={db.id} 
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={() => navigate(`/databases/${db.id}`)}
+                      >
+                        <TableCell className="px-4">
+                          <div>
+                            <p className="font-medium">{db.name}</p>
+                            <p className="text-xs text-muted-foreground">Created {new Date(db.created_at).toLocaleDateString()}</p>
+                          </div>
+                        </TableCell>
+                        <TableCell className="px-4">
+                          <div className="flex items-center gap-2">
+                            <span>{typeInfo.icon}</span>
+                            <span>{typeInfo.label}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="px-4">
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium capitalize border",
+                              getStatusBadgeClass(db.status)
                             )}
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem 
-                              onClick={() => {
-                                if (confirm('Are you sure you want to delete this database? This action cannot be undone.')) {
-                                  deleteMutation.mutate(db.id);
-                                }
-                              }}
-                              className="text-destructive focus:text-destructive"
+                          >
+                            {(db.status === 'creating' || db.status === 'restarting' || db.status === 'starting' || db.status === 'stopping') && <Loader2 className="h-3 w-3 animate-spin" />}
+                            {db.status}
+                          </span>
+                        </TableCell>
+                        <TableCell className="px-4" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-2">
+                            <code className="text-xs bg-muted px-2 py-1 rounded">
+                              {db.host}:{db.port}/{db.database}
+                            </code>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6"
+                              onClick={() => copyToClipboard(`${db.host}:${db.port}`, 'Connection')}
                             >
-                              <Trash2 className="mr-2 h-4 w-4" /> Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
-                  ))
+                              <Copy className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                        <TableCell className="px-4" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-2">
+                            <code className="text-xs bg-muted px-2 py-1 rounded">
+                              {db.username}:{showPassword === db.id ? db.password : '••••••••'}
+                            </code>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6"
+                              onClick={() => setShowPassword(showPassword === db.id ? null : db.id)}
+                            >
+                              {showPassword === db.id ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6"
+                              onClick={() => copyToClipboard(`${db.username}:${db.password}`, 'Credentials')}
+                            >
+                              <Copy className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                        <TableCell className="px-4 text-right" onClick={(e) => e.stopPropagation()}>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon">
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={() => navigate(`/databases/${db.id}`)}
+                              >
+                                <ExternalLink className="mr-2 h-4 w-4" />
+                                Open
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              {(db.status === 'running' || db.status === 'restarting') ? (
+                                <>
+                                  <DropdownMenuItem
+                                    onClick={() => restartDatabaseMutation.mutate(db.id)}
+                                    disabled={restartDatabaseMutation.isPending || db.status === 'restarting' || db.status === 'stopping'}
+                                  >
+                                    <RefreshCw className="mr-2 h-4 w-4" />
+                                    Restart
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => stopDatabaseMutation.mutate(db.id)}
+                                    disabled={stopDatabaseMutation.isPending || db.status === 'restarting' || db.status === 'stopping'}
+                                  >
+                                    <Square className="mr-2 h-4 w-4" />
+                                    Stop
+                                  </DropdownMenuItem>
+                                </>
+                              ) : db.status === 'stopped' ? (
+                                <DropdownMenuItem
+                                  onClick={() => startDatabaseMutation.mutate(db.id)}
+                                  disabled={startDatabaseMutation.isPending || db.status === 'starting'}
+                                >
+                                  <Play className="mr-2 h-4 w-4" />
+                                  Start
+                                </DropdownMenuItem>
+                              ) : null}
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                onClick={() => handleDeleteDatabase(db)}
+                                className="text-destructive focus:text-destructive"
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Delete
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
                 )}
               </TableBody>
             </Table>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Create Database Modal */}
+      <CreateDatabaseDialog 
+        open={isCreateModalOpen} 
+        onOpenChange={setIsCreateModalOpen}
+        onSubmit={handleCreateSubmit}
+        isSubmitting={createDatabaseMutation.isPending}
+      />
     </div>
   );
 }
+
+// Memoize the entire page component to prevent re-renders
+const DatabasesPage = memo(DatabasesPageContent);
+export default DatabasesPage;
