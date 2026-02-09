@@ -63,7 +63,7 @@ import { HealthBadge } from '../components/HealthBadge';
 import { ConnectionInfo } from '../components/ConnectionInfo';
 import { MetricsChart } from '../components/MetricsChart';
 
-export default function DatabaseDetailPage() {
+export default function DatabasesDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -74,8 +74,8 @@ export default function DatabaseDetailPage() {
   const { data: db, isLoading: isDbLoading, error: dbError } = useQuery<DatabaseInstance>({
     queryKey: ['database', id],
     queryFn: async () => {
-      const res = await api.get(`/api/modules/databases/databases`); // Fetch all and find, or assume dedicated endpoint if added
-      // Assuming list endpoint for now as per instructions "Fetches: /api/modules/databases/databases then finds by ID, OR dedicated endpoint"
+      const res = await api.get(`/modules/databases/databases`); // Fetch all and find, or assume dedicated endpoint if added
+      // Assuming list endpoint for now as per instructions "Fetches: /modules/databases/databases then finds by ID, OR dedicated endpoint"
       // Better to check if endpoint matches ID.
       // Let's try to fetch specific ID if the API supports it, otherwise fallback to list filter.
       // PROMPT says: "Fetches: ... then finds by ID, OR dedicated endpoint"
@@ -96,7 +96,7 @@ export default function DatabaseDetailPage() {
   const { data: metrics } = useQuery<DatabaseMetrics>({
     queryKey: ['database-metrics', id],
     queryFn: async () => {
-      const res = await api.get(`/api/modules/databases/databases/${id}/metrics`);
+      const res = await api.get(`/modules/databases/databases/${id}/metrics`);
       return res.data;
     },
     enabled: !!db && activeTab === 'metrics',
@@ -106,7 +106,7 @@ export default function DatabaseDetailPage() {
   const { data: health } = useQuery<HealthStatus>({
     queryKey: ['database-health', id],
     queryFn: async () => {
-      const res = await api.get(`/api/modules/databases/databases/${id}/health`);
+      const res = await api.get(`/modules/databases/databases/${id}/health`);
       return res.data;
     },
     enabled: !!db,
@@ -116,7 +116,7 @@ export default function DatabaseDetailPage() {
   const { data: snapshots, refetch: refetchSnapshots } = useQuery<Snapshot[]>({
     queryKey: ['database-snapshots', id],
     queryFn: async () => {
-      const res = await api.get(`/api/modules/databases/databases/${id}/snapshots`);
+      const res = await api.get(`/modules/databases/databases/${id}/snapshots`);
       return res.data;
     },
     enabled: !!db && activeTab === 'backups',
@@ -125,7 +125,7 @@ export default function DatabaseDetailPage() {
   // --- Mutations ---
 
   const startMutation = useMutation({
-    mutationFn: () => api.post(`/api/modules/databases/databases/${id}/start`),
+    mutationFn: () => api.post(`/modules/databases/databases/${id}/start`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['database', id] });
       toast.success('Database starting...');
@@ -134,7 +134,7 @@ export default function DatabaseDetailPage() {
   });
 
   const stopMutation = useMutation({
-    mutationFn: () => api.post(`/api/modules/databases/databases/${id}/stop`),
+    mutationFn: () => api.post(`/modules/databases/databases/${id}/stop`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['database', id] });
       toast.success('Database stopping...');
@@ -143,7 +143,7 @@ export default function DatabaseDetailPage() {
   });
 
   const restartMutation = useMutation({
-    mutationFn: () => api.post(`/api/modules/databases/databases/${id}/restart`),
+    mutationFn: () => api.post(`/modules/databases/databases/${id}/restart`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['database', id] });
       toast.success('Database restarting...');
@@ -152,16 +152,16 @@ export default function DatabaseDetailPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => api.delete(`/api/modules/databases/databases/${id}`),
+    mutationFn: () => api.delete(`/modules/databases/databases/${id}`),
     onSuccess: () => {
       toast.success('Database deleted');
-      navigate('/modules/databases');
+      navigate('/databases');
     },
     onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to delete'),
   });
   
   const createSnapshotMutation = useMutation({
-    mutationFn: () => api.post(`/api/modules/databases/databases/${id}/snapshots`),
+    mutationFn: () => api.post(`/modules/databases/databases/${id}/snapshots`),
     onSuccess: () => {
       toast.success('Snapshot created');
       refetchSnapshots();
@@ -183,7 +183,7 @@ export default function DatabaseDetailPage() {
       <div className="flex flex-col items-center justify-center p-12">
         <h2 className="text-xl font-semibold text-destructive">Error Loading Database</h2>
         <p className="text-muted-foreground">The database instance could not be found.</p>
-        <Button onClick={() => navigate('/modules/databases')} variant="link" className="mt-4">
+        <Button onClick={() => navigate('/databases')} variant="link" className="mt-4">
           <ArrowLeft className="mr-2 h-4 w-4" /> Back to List
         </Button>
       </div>
@@ -197,7 +197,7 @@ export default function DatabaseDetailPage() {
         <Button 
           variant="ghost" 
           className="w-fit pl-0 hover:bg-transparent" 
-          onClick={() => navigate('/modules/databases')}
+          onClick={() => navigate('/databases')}}
         >
           <ArrowLeft className="mr-2 h-4 w-4" /> Back to Databases
         </Button>

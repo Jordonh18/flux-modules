@@ -40,6 +40,6 @@
   "dependencies": [],
   "frontend": {
     "enabled": true,
-    "entry": "frontend/pages/DatabasesListPage.tsx"
+    "entry": "frontend/pages/DatabasesPage.tsx"
   }
 }
