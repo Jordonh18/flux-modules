@@ -62,6 +62,21 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
   const [formState, setFormState] = useState<FormState>(INITIAL_FORM_STATE);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
+  // Helper to get icon for engine category
+  const getCategoryIcon = (category: string) => {
+    switch (category) {
+      case 'relational': return '🐘';
+      case 'nosql': return '🍃';
+      case 'keyvalue': return '🔴';
+      case 'timeseries': return '📈';
+      case 'cache': return '⚡';
+      case 'search': return '🔍';
+      case 'graph': return '🕸️';
+      case 'message_queue': return '📬';
+      default: return '📦';
+    }
+  };
+
   // Fetch system info for SKU filtering
   const { data: systemInfo } = useQuery({
     queryKey: ['databases', 'system-info'],
