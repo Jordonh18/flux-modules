@@ -175,14 +175,11 @@ class ContainerOrchestrator:
         else:
             # Port mapping mode
             bind_ip = "0.0.0.0" if external_access else "127.0.0.1"
-            cmd.extend(["-p", f"{bind_ip}:{host_port}:{adapter_config.port}"])
+            cmd.extend(["-p", f"{bind_ip}:{host_port}:{adapter_config.default_port}"])
         
-        # Volume mounts from adapter config
-        for vol in adapter_config.volumes:
-            host_path = vol["host"]
-            container_path = vol["container"]
-            # Add SELinux label for proper permissions
-            cmd.extend(["-v", f"{host_path}:{container_path}:Z"])
+        # Volume mounts from adapter config (dict: host_path -> container_path)
+        for host_path, container_path in adapter_config.volumes.items():
+            cmd.extend(["-v", f"{host_path}:{container_path}"])
         
         # Additional volume paths
         if volume_paths:
@@ -201,14 +198,10 @@ class ContainerOrchestrator:
         for key, value in adapter_config.env_vars.items():
             cmd.extend(["-e", f"{key}={value}"])
         
-        # Health check
-        if adapter_config.health_check:
-            hc = adapter_config.health_check
+        # Health check interval from adapter config
+        if adapter_config.health_check_interval:
             cmd.extend([
-                "--health-cmd", hc["test"],
-                "--health-interval", hc.get("interval", "30s"),
-                "--health-timeout", hc.get("timeout", "10s"),
-                "--health-retries", str(hc.get("retries", 3))
+                "--health-interval", f"{adapter_config.health_check_interval}s"
             ])
         
         # Container image

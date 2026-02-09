@@ -158,7 +158,7 @@ export function CreateDatabaseDialog({ open, onOpenChange, onSubmit, isSubmittin
         // New fields from prompt: sku, memory_limit_mb, cpu_limit, storage_limit_gb, external_access, tls_enabled, tls_cert, tls_key
         
         const payload = {
-            type: formState.databaseType,
+            engine: formState.databaseType,
             name: formState.name || undefined,
             database_name: formState.databaseName,
             sku: formState.sku,

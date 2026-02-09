@@ -68,7 +68,7 @@ interface PodmanStatus {
 interface DatabaseInfo {
   id: number;
   name: string;
-  type: string;
+  engine: string;
   status: string;
   host: string;
   port: number;
@@ -79,7 +79,7 @@ interface DatabaseInfo {
 }
 
 interface CreateDatabaseRequest {
-  type: string;
+  engine: string;
   name?: string;
   database_name: string;
   sku?: string;
@@ -168,8 +168,8 @@ function DatabasesPageContent() {
         // Create temporary database entry
         const tempDatabase: DatabaseInfo = {
           id: Date.now(), // Temporary ID
-          name: newDatabase.name || `${newDatabase.type}-db`,
-          type: newDatabase.type,
+          name: newDatabase.name || `${newDatabase.engine}-db`,
+          engine: newDatabase.engine,
           status: 'creating',
           host: 'localhost',
           port: 0,
@@ -437,7 +437,7 @@ function DatabasesPageContent() {
                   </TableRow>
                 ) : (
                   databases?.map((db) => {
-                    const typeInfo = getDatabaseTypeInfo(db.type);
+                    const typeInfo = getDatabaseTypeInfo(db.engine);
                     return (
                       <TableRow 
                         key={db.id} 

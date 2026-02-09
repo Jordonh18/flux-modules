@@ -63,7 +63,7 @@ import {
 interface DatabaseInfo {
   id: number;
   name: string;
-  type: string;
+  engine: string;
   status: string;
   host: string;
   port: number;
@@ -384,7 +384,7 @@ function DatabaseDetailPageContent() {
     mutationFn: () => detailApi.deleteDatabase(databaseId),
     onSuccess: () => {
       toast.success('Database deleted');
-      navigate('/modules/databases');
+      navigate('/databases');
     },
     onError: () => toast.error('Failed to delete database'),
   });
@@ -507,7 +507,7 @@ function DatabaseDetailPageContent() {
     toast.success(`${label} copied to clipboard`);
   };
 
-  const typeInfo = database ? DATABASE_TYPES[database.type] || { label: database.type, icon: '📦' } : null;
+  const typeInfo = database ? DATABASE_TYPES[database.engine] || { label: database.engine, icon: '📦' } : null;
   const isRunning = database?.status === 'running';
 
   if (dbLoading) {
@@ -689,11 +689,11 @@ function DatabaseDetailPageContent() {
                 <div className="space-y-3">
                   <div className="flex items-start gap-2">
                     <code className="flex-1 text-xs bg-muted p-3 rounded break-all">
-                      {database.type === 'redis' 
+                      {database.engine === 'redis' 
                         ? `redis://:${showPassword ? database.password : '********'}@${database.host}:${database.port}/0`
-                        : database.type === 'mongodb'
+                        : database.engine === 'mongodb'
                         ? `mongodb://${database.username}:${showPassword ? database.password : '********'}@${database.host}:${database.port}/${database.database}`
-                        : `${database.type === 'postgresql' ? 'postgresql' : 'mysql'}://${database.username}:${showPassword ? database.password : '********'}@${database.host}:${database.port}/${database.database}`
+                        : `${database.engine === 'postgresql' ? 'postgresql' : 'mysql'}://${database.username}:${showPassword ? database.password : '********'}@${database.host}:${database.port}/${database.database}`
                       }
                     </code>
                   </div>
@@ -702,11 +702,11 @@ function DatabaseDetailPageContent() {
                     size="sm" 
                     className="w-full"
                     onClick={() => {
-                      const connString = database.type === 'redis' 
+                      const connString = database.engine === 'redis' 
                         ? `redis://:${database.password}@${database.host}:${database.port}/0`
-                        : database.type === 'mongodb'
+                        : database.engine === 'mongodb'
                         ? `mongodb://${database.username}:${database.password}@${database.host}:${database.port}/${database.database}`
-                        : `${database.type === 'postgresql' ? 'postgresql' : 'mysql'}://${database.username}:${database.password}@${database.host}:${database.port}/${database.database}`;
+                        : `${database.engine === 'postgresql' ? 'postgresql' : 'mysql'}://${database.username}:${database.password}@${database.host}:${database.port}/${database.database}`;
                       copyToClipboard(connString, 'Connection string');
                     }}
                   >

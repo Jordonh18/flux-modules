@@ -468,22 +468,34 @@ async def create_database(request: CreateDatabaseRequest, db: AsyncSession = Dep
                 try:
                     orchestrator = ContainerOrchestrator()
                     
-                    # Create container
-                    container_id = await orchestrator.create_container(
-                        engine=request.engine,
+                    # Create volume directories for persistent storage
+                    volume_paths = VolumeService.create_volumes(container_name)
+                    
+                    # Build container config via adapter
+                    adapter_config = adapter.get_container_config(
                         container_name=container_name,
+                        database_name=request.database_name,
                         username=username,
                         password=password,
-                        database_name=request.database_name,
-                        memory_mb=memory_mb,
-                        cpu_limit=cpu_limit,
-                        storage_gb=storage_gb,
                         port=adapter.default_port,
+                        memory_mb=memory_mb,
+                        cpu=cpu_limit,
+                        volume_paths=volume_paths,
+                        tls_cert_path=None,  # TODO: write TLS certs to disk if provided
+                        tls_key_path=None,
+                    )
+                    
+                    # Create container with proper orchestrator signature
+                    container_id = await orchestrator.create_container(
+                        container_name=container_name,
+                        adapter_config=adapter_config,
+                        host_port=adapter.default_port,
                         external_access=request.external_access,
-                        tls_enabled=request.tls_enabled,
-                        tls_cert=request.tls_cert,
-                        tls_key=request.tls_key,
-                        vnet_name=request.vnet_name
+                        memory_mb=memory_mb,
+                        cpu=cpu_limit,
+                        sku=request.sku,
+                        vnet_bridge=None,
+                        vnet_ip=None,
                     )
                     
                     # Start container
