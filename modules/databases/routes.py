@@ -16,6 +16,8 @@ from module_sdk import (
     BaseModel,
     Optional,
     List,
+    Dict,
+    Any,
     # VNet hooks
     allocate_vnet_ip,
     release_vnet_ip,
@@ -23,20 +25,38 @@ from module_sdk import (
     list_available_vnets,
 )
 from database import get_db_context
-from enum import Enum
 import secrets
 import asyncio
+import logging
+import os
+import time as _time
+import subprocess
+import json
 
-# Import from module's own services (self-contained)
-from .services.container_service import (
-    ContainerService,
-    DatabaseType,
-    ContainerStatus,
-    DatabaseCredentials,
+from . import (
+    INSTANCES_TABLE,
+    SNAPSHOTS_TABLE,
+    BACKUPS_TABLE,
+    METRICS_TABLE,
+    HEALTH_TABLE,
+    CREDENTIALS_TABLE,
+    USERS_TABLE,
+    DATABASES_TABLE,
 )
-from .services.volume_service import VolumeService
+from .services import (
+    get_adapter,
+    list_engines,
+    ContainerOrchestrator,
+    BackupService,
+    MetricsCollector,
+    HealthMonitor,
+    CredentialManager,
+    DatabaseOperations,
+    VolumeService,
+    InstanceManager,
+)
 
-# Create router
+logger = logging.getLogger("uvicorn.error")
 router = ModuleRouter("databases")
 
 
@@ -88,770 +108,42 @@ SKU_DEFINITIONS = {
 # Pydantic Models
 # ============================================================================
 
-class DatabaseTypeEnum(str, Enum):
-    """Database types available for creation"""
-    postgresql = "postgresql"
-    mysql = "mysql"
-    mariadb = "mariadb"
-    mongodb = "mongodb"
-    redis = "redis"
-
-
 class CreateDatabaseRequest(BaseModel):
-    """Request to create a new database"""
-    type: DatabaseTypeEnum
+    """Request to create a new database instance"""
+    engine: str
     name: Optional[str] = None
     database_name: str = "app"
-    sku: str = "d1"
+    sku: str = "d2"
     memory_limit_mb: Optional[int] = None
     cpu_limit: Optional[float] = None
     storage_limit_gb: Optional[int] = None
     external_access: bool = False
     tls_enabled: bool = False
-    tls_cert: Optional[str] = None  # Base64 encoded certificate
-    tls_key: Optional[str] = None   # Base64 encoded key
-    vnet_name: Optional[str] = None  # VNet to connect to (optional)
+    tls_cert: Optional[str] = None
+    tls_key: Optional[str] = None
+    vnet_name: Optional[str] = None
 
 
-class DatabaseInfo(BaseModel):
-    """Database container information"""
-    id: str
-    name: str
-    type: str
-    status: str
-    host: str
-    port: int
-    database: str
+class RotateCredentialsRequest(BaseModel):
+    """Request to rotate instance credentials"""
+    pass  # Empty, just triggers rotation
+
+
+class CreateUserRequest(BaseModel):
+    """Request to create a user within an instance"""
     username: str
-    password: str
-    connection_string: str
+    password: Optional[str] = None  # Auto-generated if not provided
+    permissions: Optional[List[str]] = None
 
 
-class PodmanStatus(BaseModel):
-    """Podman installation status"""
-    installed: bool
-    version: Optional[str] = None
-    message: str
-
-
-# ============================================================================
-# API Endpoints
-# ============================================================================
-
-@router.get("/status")
-async def get_status():
-    """
-    Get databases module status.
-    """
-    podman_installed, version = await ContainerService.check_podman_installed()
-    return {
-        "status": "ok",
-        "message": "Databases module is running",
-        "podman": {
-            "installed": podman_installed,
-            "version": version,
-        }
-    }
-
-
-@router.get("/requirements")
-async def get_requirements():
-    """
-    Check system requirements for the databases module.
-    Returns status and any setup instructions needed.
-    """
-    issues = []
-    instructions = []
-    
-    # Check Podman
-    podman_installed, version = await ContainerService.check_podman_installed()
-    if not podman_installed:
-        issues.append("Podman is not installed")
-        instructions.append({
-            "title": "Install Podman",
-            "description": "Podman is required to run database containers",
-            "action": "install_podman",
-            "manual_command": "sudo apt install -y podman  # Debian/Ubuntu\nsudo dnf install -y podman  # Fedora/RHEL"
-        })
-    
-    # Check if user can access podman (rootless)
-    if podman_installed:
-        try:
-            info = await ContainerService.get_podman_info()
-            if not info:
-                issues.append("Cannot access Podman - check user permissions")
-                instructions.append({
-                    "title": "Configure Podman Access",
-                    "description": "The flux user needs permission to run Podman",
-                    "manual_command": "sudo usermod -aG podman flux  # Add flux user to podman group\nsudo loginctl enable-linger flux  # Enable lingering for systemd services"
-                })
-        except Exception:
-            pass
-    
-    return {
-        "ready": len(issues) == 0,
-        "podman": {
-            "installed": podman_installed,
-            "version": version,
-        },
-        "issues": issues,
-        "instructions": instructions,
-    }
-
-
-@router.get("/system-info")
-async def get_system_info():
-    """
-    Get host system information (CPU cores, RAM).
-    Used to filter database SKUs that exceed system capacity.
-    """
-    import os
-    
-    # Get CPU count
-    cpu_cores = os.cpu_count() or 1
-    
-    # Get total RAM from /proc/meminfo (Linux)
-    total_memory_mb = 0
-    try:
-        with open('/proc/meminfo', 'r') as f:
-            for line in f:
-                if line.startswith('MemTotal:'):
-                    # MemTotal is in KB, convert to MB
-                    total_memory_kb = int(line.split()[1])
-                    total_memory_mb = total_memory_kb // 1024
-                    break
-    except Exception:
-        # Fallback to a conservative estimate if we can't read meminfo
-        total_memory_mb = 4096  # 4GB default
-    
-    return {
-        "cpu_cores": cpu_cores,
-        "total_memory_mb": total_memory_mb,
-    }
-
-
-@router.get("/podman/status", response_model=PodmanStatus)
-async def get_podman_status():
-    """
-    Check if Podman is installed and get version.
-    """
-    installed, version = await ContainerService.check_podman_installed()
-    if installed:
-        return PodmanStatus(
-            installed=True,
-            version=version,
-            message="Podman is installed and ready"
-        )
-    return PodmanStatus(
-        installed=False,
-        version=None,
-        message="Podman is not installed. Click 'Install Podman' to set it up."
-    )
-
-
-@router.post("/podman/install", response_model=PodmanStatus)
-async def install_podman(current_user = Depends(require_permission("databases:write"))):
-    """
-    Attempt to install Podman on the system.
-    Requires databases:write permission.
-    """
-    # First check if already installed
-    installed, version = await ContainerService.check_podman_installed()
-    if installed:
-        return PodmanStatus(
-            installed=True,
-            version=version,
-            message="Podman is already installed"
-        )
-    
-    # Attempt installation
-    success, message = await ContainerService.install_podman()
-    
-    if success:
-        installed, version = await ContainerService.check_podman_installed()
-        return PodmanStatus(
-            installed=True,
-            version=version,
-            message=message
-        )
-    
-    raise HTTPException(status_code=500, detail=message)
-
-
-@router.get("/databases", response_model=List[dict])
-async def list_databases(
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:read"))
-):
-    """
-    List all Flux-managed database containers.
-    """
-    # Get stored credentials from database first
-    result = await db.execute(text("""
-        SELECT id, container_id, container_name, database_type, host, port, 
-               database_name, username, password, status, error_message, created_at,
-               sku, memory_limit_mb, cpu_limit, storage_limit_gb, external_access, tls_enabled
-        FROM databases_instances
-        ORDER BY created_at DESC
-    """))
-    stored_dbs = result.fetchall()
-    
-    # Get container names we're tracking
-    container_names = [row.container_name for row in stored_dbs]
-    
-    # Get containers from Podman (only the ones we're tracking)
-    containers = await ContainerService.list_flux_containers(container_names)
-    
-    # Merge container status with stored info
-    databases = []
-    container_map = {c.name: c for c in containers}
-    
-    for row in stored_dbs:
-        container = container_map.get(row.container_name)
-        
-        # Always prefer real container status when container exists
-        if container:
-            status = container.status.value
-            # Map container statuses to user-friendly names
-            if status in ['exited', 'created']:
-                status = 'stopped'
-        elif row.status == 'error':
-            # Show error status if no container and DB says error
-            status = 'error'
-        elif row.status == 'creating':
-            # Show creating if no container yet
-            status = 'creating'
-        else:
-            status = 'stopped'
-        
-        databases.append({
-            "id": row.id,
-            "name": row.container_name,
-            "type": row.database_type,
-            "status": status,
-            "host": row.host,
-            "port": row.port,
-            "database": row.database_name,
-            "username": row.username,
-            "password": row.password,
-            "created_at": row.created_at,
-            "error_message": row.error_message if status == 'error' else None,
-            "sku": row.sku,
-            "memory_limit_mb": row.memory_limit_mb,
-            "cpu_limit": row.cpu_limit,
-            "storage_limit_gb": row.storage_limit_gb,
-            "external_access": row.external_access,
-            "tls_enabled": row.tls_enabled,
-        })
-    
-    return databases
-
-
-@router.post("/databases", response_model=dict)
-async def create_database(
-    request: CreateDatabaseRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:write"))
-):
-    """
-    Create a new database container.
-    Creates the database record immediately and updates status as container is created.
-    """
-    # Check Podman is available
-    installed, _ = await ContainerService.check_podman_installed()
-    if not installed:
-        raise HTTPException(
-            status_code=400,
-            detail="Podman is not installed. Please install Podman first."
-        )
-    
-    # Map enum to DatabaseType
-    db_type = DatabaseType(request.type.value)
-    
-    # Validate TLS configuration (CRITICAL FIX)
-    if request.tls_enabled:
-        if not request.tls_cert or not request.tls_key:
-            raise HTTPException(
-                status_code=400,
-                detail="TLS enabled requires both certificate and private key"
-            )
-    
-    # Apply SKU resources or use custom values
-    if request.sku == "custom":
-        # Use provided custom values
-        memory_limit_mb = request.memory_limit_mb
-        cpu_limit = request.cpu_limit
-        storage_limit_gb = request.storage_limit_gb
-        
-        # Validate custom values are provided
-        if not memory_limit_mb or not cpu_limit or not storage_limit_gb:
-            raise HTTPException(
-                status_code=400,
-                detail="Custom SKU requires memory_limit_mb, cpu_limit, and storage_limit_gb"
-            )
-        
-        # Validate custom resource limits (MAJOR FIX)
-        if memory_limit_mb < 512 or memory_limit_mb > 65536:
-            raise HTTPException(
-                status_code=400,
-                detail="Memory must be between 512MB and 64GB"
-            )
-        if cpu_limit < 0.5 or cpu_limit > 32:
-            raise HTTPException(
-                status_code=400,
-                detail="CPU must be between 0.5 and 32 vCPUs"
-            )
-        if storage_limit_gb < 10 or storage_limit_gb > 1000:
-            raise HTTPException(
-                status_code=400,
-                detail="Storage must be between 10GB and 1000GB"
-            )
-    else:
-        # Apply SKU tier resources
-        if request.sku not in SKU_DEFINITIONS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid SKU tier: {request.sku}. Must be one of: {', '.join(SKU_DEFINITIONS.keys())}"
-            )
-        
-        sku_config = SKU_DEFINITIONS[request.sku]
-        memory_limit_mb = sku_config["memory_mb"]
-        cpu_limit = sku_config["cpus"]
-        storage_limit_gb = sku_config["storage_gb"]
-    
-    # Get already-used ports from database (including creating databases)
-    port_result = await db.execute(text("SELECT port FROM databases_instances"))
-    used_ports = {row.port for row in port_result.fetchall()}
-    
-    # Generate container name and credentials upfront
-    suffix = secrets.token_hex(4)
-    if request.name:
-        # Use user's chosen name + UUID (no extra prefixes)
-        container_name = f"{request.name}-{suffix}"
-    else:
-        # Fallback to db type + UUID
-        container_name = f"{db_type.value}-{suffix}"
-    
-    username = ContainerService.generate_username()
-    password = ContainerService.generate_password()
-    host_port = ContainerService.find_available_port(exclude_ports=used_ports)
-    
-    # Try to allocate a VNet IP for this database (optional - falls back to port mapping)
-    vnet_ip = None
-    vnet_id = None
-    vnet_bridge = None
-    if allocate_vnet_ip is not None and request.vnet_name:
-        try:
-            # Use the user-selected VNet
-            allocation = await allocate_vnet_ip(
-                vnet_name=request.vnet_name,
-                module_name="databases",
-                resource_id=container_name,
-                label=f"{db_type.value} - {request.name or container_name}",
-            )
-            if allocation:
-                vnet_ip = allocation.get("ip_address")
-                vnet_id = allocation.get("vnet_id")
-                # Get VNet details to find bridge name
-                vnets = await list_available_vnets()
-                selected_vnet = next((v for v in vnets if v["name"] == request.vnet_name), None)
-                if selected_vnet:
-                    vnet_bridge = selected_vnet.get("bridge_name")
-        except Exception as vnet_err:
-            # VNet allocation is best-effort; log and continue with port mapping
-            print(f"VNet allocation failed: {vnet_err}")
-    
-    # Connection host is VNet IP if allocated, otherwise localhost
-    connection_host = vnet_ip if vnet_ip else "localhost"
-    connection_port = host_port  # Port mapping still used as fallback/alongside
-    
-    try:
-        # Insert database record immediately with 'creating' status and config
-        result = await db.execute(text("""
-            INSERT INTO databases_instances 
-            (container_id, container_name, database_type, host, port, database_name, username, password, status,
-             sku, memory_limit_mb, cpu_limit, storage_limit_gb, external_access, tls_enabled)
-            VALUES (:container_id, :container_name, :database_type, :host, :port, :database_name, :username, :password, 'creating',
-                    :sku, :memory_limit_mb, :cpu_limit, :storage_limit_gb, :external_access, :tls_enabled)
-            RETURNING id
-        """), {
-            "container_id": None,  # Will be updated when container is created
-            "container_name": container_name,
-            "database_type": db_type.value,
-            "host": connection_host,
-            "port": host_port,
-            "database_name": request.database_name,
-            "username": username,
-            "password": password,
-            "sku": request.sku,
-            "memory_limit_mb": memory_limit_mb,
-            "cpu_limit": cpu_limit,
-            "storage_limit_gb": storage_limit_gb,
-            "external_access": request.external_access,
-            "tls_enabled": request.tls_enabled,
-        })
-        db_id = result.scalar()
-        await db.commit()
-        
-        # Create container in background task
-        async def create_container_background():
-            """Background task to create container and update status"""
-            try:
-                # Handle TLS cert upload if provided
-                tls_cert_path = None
-                tls_key_path = None
-                if request.tls_enabled and request.tls_cert and request.tls_key:
-                    # Create volumes first (needed for TLS cert storage)
-                    VolumeService.create_volumes(container_name)
-                    
-                    # Save TLS certificates
-                    tls_paths = VolumeService.save_tls_certs(
-                        container_name,
-                        request.tls_cert,
-                        request.tls_key
-                    )
-                    tls_cert_path = tls_paths["cert_path"]
-                    tls_key_path = tls_paths["key_path"]
-                    
-                    # Update database record with TLS paths
-                    try:
-                        async with get_db_context() as background_db:
-                            await background_db.execute(text("""
-                                UPDATE databases_instances 
-                                SET tls_cert_path = :tls_cert_path, tls_key_path = :tls_key_path, updated_at = datetime('now')
-                                WHERE id = :id
-                            """), {
-                                "tls_cert_path": tls_cert_path,
-                                "tls_key_path": tls_key_path,
-                                "id": db_id
-                            })
-                    except Exception as db_error:
-                        print(f"Failed to update TLS paths: {db_error}")
-                
-                credentials = await ContainerService.create_database(
-                    db_type=db_type,
-                    name=request.name,
-                    database_name=request.database_name,
-                    container_name=container_name,
-                    username=username,
-                    password=password,
-                    host_port=host_port,
-                    external_access=request.external_access,
-                    memory_limit_mb=memory_limit_mb,
-                    cpu_limit=cpu_limit,
-                    sku=request.sku,
-                    tls_cert_path=tls_cert_path,
-                    tls_key_path=tls_key_path,
-                    vnet_bridge=vnet_bridge,
-                    vnet_ip=vnet_ip,
-                )
-                
-                # Update record with container ID and success status
-                try:
-                    async with get_db_context() as background_db:
-                        await background_db.execute(text("""
-                            UPDATE databases_instances 
-                            SET container_id = :container_id, volume_path = :volume_path, 
-                                host = :host, port = :port,
-                                status = 'running', error_message = NULL, updated_at = datetime('now')
-                            WHERE id = :id
-                        """), {
-                            "container_id": credentials.container_id,
-                            "volume_path": credentials.volume_path,
-                            "host": credentials.host,
-                            "port": credentials.port,
-                            "id": db_id
-                        })
-                except Exception as db_error:
-                    print(f"Failed to update database status: {db_error}")
-                    
-            except Exception as container_error:
-                print(f"Container creation failed: {container_error}")
-                # Update record with error status
-                try:
-                    async with get_db_context() as background_db:
-                        await background_db.execute(text("""
-                            UPDATE databases_instances 
-                            SET status = 'error', error_message = :error, updated_at = datetime('now')
-                            WHERE id = :id
-                        """), {
-                            "error": str(container_error),
-                            "id": db_id
-                        })
-                except Exception as db_error:
-                    print(f"Failed to update error status: {db_error}")
-        
-        # Start background task (don't await)
-        asyncio.create_task(create_container_background())
-        
-        # Return immediately
-        return {
-            "success": True,
-            "message": f"{db_type.value} database creation started",
-            "database": {
-                "id": db_id,
-                "name": container_name,
-                "type": db_type.value,
-                "host": connection_host,
-                "port": host_port,
-                "database": request.database_name,
-                "username": username,
-                "password": password,
-                "status": "creating",
-                "sku": request.sku,
-                "memory_limit_mb": memory_limit_mb,
-                "cpu_limit": cpu_limit,
-                "storage_limit_gb": storage_limit_gb,
-                "external_access": request.external_access,
-                "tls_enabled": request.tls_enabled,
-                "vnet_ip": vnet_ip,
-                "vnet_bridge": vnet_bridge,
-            }
-        }
-        
-    except Exception as e:
-        # Rollback database transaction on any error
-        await db.rollback()
-        
-        # Extract clean error message
-        error_msg = str(e)
-        if "already in use" in error_msg.lower() or "unique" in error_msg.lower():
-            error_msg = "A database with this name already exists. Please try again."
-        elif "timeout" in error_msg.lower():
-            error_msg = "Database creation timed out. The image may still be downloading. Please try again in a moment."
-        
-        raise HTTPException(status_code=500, detail=error_msg)
-
-
-@router.post("/databases/{database_id}/start")
-async def start_database(
-    database_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:write"))
-):
-    """
-    Start a stopped database container.
-    """
-    result = await db.execute(text(
-        "SELECT container_name FROM databases_instances WHERE id = :id"
-    ), {"id": database_id})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Database not found")
-    
-    success = await ContainerService.start_container(row.container_name)
-    if success:
-        # Clear any stale error messages when container starts successfully
-        await db.execute(text("""
-            UPDATE databases_instances 
-            SET status = 'running', error_message = NULL, updated_at = datetime('now')
-            WHERE id = :id
-        """), {"id": database_id})
-        await db.commit()
-        return {"success": True, "message": "Database started"}
-    raise HTTPException(status_code=500, detail="Failed to start database")
-
-
-@router.post("/databases/{database_id}/stop")
-async def stop_database(
-    database_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:write"))
-):
-    """
-    Stop a running database container.
-    """
-    result = await db.execute(text(
-        "SELECT container_name FROM databases_instances WHERE id = :id"
-    ), {"id": database_id})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Database not found")
-    
-    success = await ContainerService.stop_container(row.container_name)
-    if success:
-        return {"success": True, "message": "Database stopped"}
-    raise HTTPException(status_code=500, detail="Failed to stop database")
-
-
-@router.post("/databases/{database_id}/restart")
-async def restart_database(
-    database_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:write"))
-):
-    """
-    Restart a database container.
-    """
-    result = await db.execute(text(
-        "SELECT container_name FROM databases_instances WHERE id = :id"
-    ), {"id": database_id})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Database not found")
-    
-    success = await ContainerService.restart_container(row.container_name)
-    if success:
-        # Clear any stale error messages when container restarts successfully
-        await db.execute(text("""
-            UPDATE databases_instances 
-            SET status = 'running', error_message = NULL, updated_at = datetime('now')
-            WHERE id = :id
-        """), {"id": database_id})
-        await db.commit()
-        return {"success": True, "message": "Database restarted"}
-    raise HTTPException(status_code=500, detail="Failed to restart database")
-
-
-@router.delete("/databases/{database_id}")
-async def delete_database(
-    database_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:write"))
-):
-    """
-    Delete a database container and its stored credentials.
-    Also removes persistent storage volumes.
-    """
-    result = await db.execute(text(
-        "SELECT container_name FROM databases_instances WHERE id = :id"
-    ), {"id": database_id})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Database not found")
-    
-    # Remove container (force stop if running)
-    await ContainerService.remove_container(row.container_name, force=True)
-    
-    # Cleanup persistent volumes
-    try:
-        VolumeService.cleanup_volumes(row.container_name)
-    except Exception as vol_error:
-        print(f"Warning: Failed to cleanup volumes for {row.container_name}: {vol_error}")
-    
-    # Release VNet IP allocation if available
-    if release_vnet_ip is not None:
-        try:
-            await release_vnet_ip(module_name="databases", resource_id=row.container_name)
-        except Exception as vnet_err:
-            print(f"Warning: Failed to release VNet IP for {row.container_name}: {vnet_err}")
-    
-    # Remove from database
-    await db.execute(text("DELETE FROM databases_instances WHERE id = :id"), {"id": database_id})
-    await db.commit()
-    
-    return {"success": True, "message": "Database deleted"}
+class CreateInnerDatabaseRequest(BaseModel):
+    """Request to create a database within an instance"""
+    name: str
 
 
 # ============================================================================
-# In-memory metrics history ring buffer (per database, max 120 points ≈ 10min at 5s intervals)
+# Helper Functions
 # ============================================================================
-import time as _time
-from collections import deque
-
-_metrics_history: dict[int, deque] = {}
-_METRICS_MAX_POINTS = 2592000  # ~30 days at 1s intervals
-
-
-@router.get("/databases/{database_id}/logs")
-async def get_database_logs(
-    database_id: int,
-    lines: int = 200,
-    level: str = "",
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:read"))
-):
-    """
-    Get structured database logs with timestamp, level, and message.
-    Optionally filter by level (info, warning, error, debug).
-    """
-    result = await db.execute(text(
-        "SELECT container_name, database_type FROM databases_instances WHERE id = :id"
-    ), {"id": database_id})
-    row = result.fetchone()
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Database not found")
-
-    db_type = DatabaseType(row.database_type)
-    entries = await ContainerService.get_database_native_logs(row.container_name, db_type, lines)
-
-    if level:
-        entries = [e for e in entries if e.get("level") == level.lower()]
-
-    return {"entries": entries}
-
-
-@router.get("/databases/{database_id}/metrics")
-async def get_database_metrics(
-    database_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:read"))
-):
-    """
-    Get current database performance metrics and append to history.
-    Returns both current metrics and the time-series history.
-    """
-    result = await db.execute(text(
-        "SELECT container_name, database_type, database_name, username, password "
-        "FROM databases_instances WHERE id = :id"
-    ), {"id": database_id})
-    row = result.fetchone()
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Database not found")
-
-    db_type = DatabaseType(row.database_type)
-
-    # Get resource stats (CPU / memory) and DB-specific metrics in parallel
-    stats_task = ContainerService.get_container_stats(row.container_name)
-    metrics_task = ContainerService.get_database_metrics(
-        row.container_name, db_type, row.database_name, row.username, row.password
-    )
-    container_stats, db_metrics = await asyncio.gather(stats_task, metrics_task)
-
-    # Parse CPU / memory from container stats
-    cpu_pct = 0.0
-    mem_used_mb = 0.0
-    mem_limit_mb = 0.0
-    mem_pct = 0.0
-    if not container_stats.get("error"):
-        try:
-            cpu_pct = float(str(container_stats.get("cpu_percent", "0")).replace("%", ""))
-        except ValueError:
-            pass
-        try:
-            mem_str = str(container_stats.get("mem_usage", "0B / 0B"))
-            parts = mem_str.split("/")
-            mem_used_mb = _parse_mem_value(parts[0].strip())
-            mem_limit_mb = _parse_mem_value(parts[1].strip()) if len(parts) > 1 else 0
-            mem_pct = float(str(container_stats.get("mem_percent", "0")).replace("%", ""))
-        except (ValueError, IndexError):
-            pass
-
-    current = {
-        "timestamp": _time.time(),
-        "cpu_percent": round(cpu_pct, 2),
-        "memory_used_mb": round(mem_used_mb, 1),
-        "memory_limit_mb": round(mem_limit_mb, 1),
-        "memory_percent": round(mem_pct, 2),
-        **db_metrics,
-    }
-
-    # Append to ring buffer
-    if database_id not in _metrics_history:
-        _metrics_history[database_id] = deque(maxlen=_METRICS_MAX_POINTS)
-    _metrics_history[database_id].append(current)
-
-    return {
-        "current": current,
-        "history": list(_metrics_history[database_id]),
-    }
-
 
 def _parse_mem_value(s: str) -> float:
     """Parse a memory string like '123.4MiB' or '1.2GiB' into MB."""
@@ -876,359 +168,1173 @@ def _parse_mem_value(s: str) -> float:
         return 0.0
 
 
-@router.get("/databases/{database_id}/stats")
-async def get_database_stats(
-    database_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:read"))
-):
-    """
-    Get container resource stats (CPU, memory, network, disk).
-    """
-    result = await db.execute(text(
-        "SELECT container_name FROM databases_instances WHERE id = :id"
-    ), {"id": database_id})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Database not found")
-    
-    stats = await ContainerService.get_container_stats(row.container_name)
-    return stats
+# ============================================================================
+# API Endpoints
+# ============================================================================
 
-
-@router.get("/databases/{database_id}/inspect")
-async def inspect_database(
-    database_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:read"))
-):
-    """
-    Get detailed container information.
-    """
-    result = await db.execute(text(
-        "SELECT container_name, database_type, database_name, username, password FROM databases_instances WHERE id = :id"
-    ), {"id": database_id})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Database not found")
-    
-    # Get container inspect info
-    inspect_info = await ContainerService.get_container_inspect(row.container_name)
-    
-    # Get database size
-    db_type = DatabaseType(row.database_type)
-    size_info = await ContainerService.get_database_size(
-        row.container_name, db_type, row.database_name, row.username, row.password
-    )
+@router.get("/status")
+async def get_status():
+    """Get databases module status."""
+    try:
+        result = subprocess.run(
+            ["podman", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        podman_installed = result.returncode == 0
+        version = result.stdout.strip() if podman_installed else None
+    except Exception:
+        podman_installed = False
+        version = None
     
     return {
-        "container": inspect_info,
-        "database_size": size_info,
+        "status": "ok",
+        "message": "Databases module is running",
+        "podman": {
+            "installed": podman_installed,
+            "version": version
+        }
     }
 
 
-@router.post("/databases/{database_id}/snapshot")
-async def snapshot_database(
-    database_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:write"))
-):
-    """
-    Create a snapshot of the database.
-    Returns the snapshot file path.
-    """
-    import os
-    from datetime import datetime
-    
-    result = await db.execute(text(
-        "SELECT container_name, database_type, database_name, username, password FROM databases_instances WHERE id = :id"
-    ), {"id": database_id})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Database not found")
-    
-    # Create snapshots directory
-    snapshot_dir = os.path.expanduser("~/.flux/snapshots/databases")
-    os.makedirs(snapshot_dir, exist_ok=True)
-    
-    # Generate snapshot filename
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    snapshot_filename = f"{row.container_name}_{timestamp}.sql"
-    if row.database_type == "mongodb":
-        snapshot_filename = f"{row.container_name}_{timestamp}.archive"
-    elif row.database_type == "redis":
-        snapshot_filename = f"{row.container_name}_{timestamp}.rdb"
-    
-    snapshot_path = os.path.join(snapshot_dir, snapshot_filename)
-    
-    db_type = DatabaseType(row.database_type)
-    success, message = await ContainerService.backup_database(
-        row.container_name, db_type, row.database_name, row.username, row.password, snapshot_path
-    )
-    
-    if success:
-        # Store snapshot record
-        await db.execute(text("""
-            INSERT INTO databases_snapshots (database_id, snapshot_path, snapshot_size, created_at)
-            VALUES (:database_id, :snapshot_path, :snapshot_size, datetime('now'))
-        """), {
-            "database_id": database_id,
-            "snapshot_path": snapshot_path,
-            "snapshot_size": os.path.getsize(snapshot_path) if os.path.exists(snapshot_path) else 0,
+@router.get("/requirements")
+async def check_requirements():
+    """Check system requirements for running database containers."""
+    try:
+        # Check Podman installation
+        podman_result = subprocess.run(
+            ["podman", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        podman_ok = podman_result.returncode == 0
+        
+        # Check available disk space
+        stat_result = subprocess.run(
+            ["df", "-BG", "/"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        disk_available_gb = 0
+        if stat_result.returncode == 0:
+            lines = stat_result.stdout.strip().split('\n')
+            if len(lines) > 1:
+                parts = lines[1].split()
+                if len(parts) > 3:
+                    disk_available_gb = int(parts[3].replace('G', ''))
+        
+        return {
+            "podman_installed": podman_ok,
+            "podman_version": podman_result.stdout.strip() if podman_ok else None,
+            "disk_available_gb": disk_available_gb,
+            "requirements_met": podman_ok and disk_available_gb >= 10
+        }
+    except Exception as e:
+        logger.error(f"Error checking requirements: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/system-info")
+async def get_system_info():
+    """Get host system information (CPU, memory)."""
+    try:
+        # CPU info
+        cpu_count = os.cpu_count() or 1
+        
+        # Memory info
+        mem_info = {}
+        try:
+            with open("/proc/meminfo", "r") as f:
+                lines = f.readlines()
+                for line in lines:
+                    if line.startswith("MemTotal:"):
+                        mem_info["total_mb"] = int(line.split()[1]) // 1024
+                    elif line.startswith("MemAvailable:"):
+                        mem_info["available_mb"] = int(line.split()[1]) // 1024
+        except Exception:
+            pass
+        
+        return {
+            "cpu_count": cpu_count,
+            "memory": mem_info
+        }
+    except Exception as e:
+        logger.error(f"Error getting system info: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/podman/status")
+async def get_podman_status():
+    """Check Podman installation status."""
+    try:
+        result = subprocess.run(
+            ["podman", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            return {
+                "installed": True,
+                "version": result.stdout.strip(),
+                "message": "Podman is installed and ready"
+            }
+        else:
+            return {
+                "installed": False,
+                "version": None,
+                "message": "Podman is not installed"
+            }
+    except FileNotFoundError:
+        return {
+            "installed": False,
+            "version": None,
+            "message": "Podman is not installed"
+        }
+    except Exception as e:
+        logger.error(f"Error checking Podman status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/podman/install", dependencies=[Depends(require_permission("databases:write"))])
+async def install_podman():
+    """Install Podman on the host system."""
+    try:
+        # This is a placeholder - actual installation depends on the host OS
+        # For Debian/Ubuntu:
+        result = subprocess.run(
+            ["sudo", "apt-get", "install", "-y", "podman"],
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        if result.returncode == 0:
+            return {
+                "success": True,
+                "message": "Podman installed successfully"
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"Installation failed: {result.stderr}"
+            }
+    except Exception as e:
+        logger.error(f"Error installing Podman: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/engines")
+async def get_engines():
+    """List all supported database engines from the adapter registry."""
+    engines = list_engines()
+    return {
+        "engines": engines,
+        "count": len(engines)
+    }
+
+
+@router.get("/skus")
+async def get_skus():
+    """List all available SKU definitions."""
+    return {
+        "skus": SKU_DEFINITIONS,
+        "count": len([k for k in SKU_DEFINITIONS.keys() if k != "custom"])
+    }
+
+
+@router.get("/databases", dependencies=[Depends(require_permission("databases:read"))])
+async def list_databases(db: AsyncSession = Depends(get_db)):
+    """List all database instances."""
+    try:
+        result = await db.execute(text(f'''
+            SELECT id, container_id, container_name, database_type, host, port,
+                   database_name, username, password, status, error_message, created_at,
+                   sku, memory_limit_mb, cpu_limit, storage_limit_gb, external_access, tls_enabled
+            FROM "{INSTANCES_TABLE}"
+            ORDER BY created_at DESC
+        '''))
+        rows = result.fetchall()
+        
+        databases = []
+        for row in rows:
+            databases.append({
+                "id": row[0],
+                "container_id": row[1],
+                "container_name": row[2],
+                "database_type": row[3],
+                "host": row[4],
+                "port": row[5],
+                "database_name": row[6],
+                "username": row[7],
+                "password": row[8],
+                "status": row[9],
+                "error_message": row[10],
+                "created_at": row[11],
+                "sku": row[12],
+                "memory_limit_mb": row[13],
+                "cpu_limit": row[14],
+                "storage_limit_gb": row[15],
+                "external_access": row[16],
+                "tls_enabled": row[17]
+            })
+        
+        return {"databases": databases, "count": len(databases)}
+    except Exception as e:
+        logger.error(f"Error listing databases: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/databases", dependencies=[Depends(require_permission("databases:write"))])
+async def create_database(request: CreateDatabaseRequest, db: AsyncSession = Depends(get_db)):
+    """Create a new database instance."""
+    try:
+        # Validate engine
+        try:
+            adapter = get_adapter(request.engine)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        
+        # Validate SKU
+        if request.sku not in SKU_DEFINITIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid SKU tier: {request.sku}. Must be one of: {', '.join(SKU_DEFINITIONS.keys())}"
+            )
+        
+        sku_config = SKU_DEFINITIONS[request.sku]
+        
+        # Determine resource limits
+        if request.sku == "custom":
+            if not request.memory_limit_mb or not request.cpu_limit or not request.storage_limit_gb:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Custom SKU requires memory_limit_mb, cpu_limit, and storage_limit_gb"
+                )
+            memory_mb = request.memory_limit_mb
+            cpu_limit = request.cpu_limit
+            storage_gb = request.storage_limit_gb
+        else:
+            memory_mb = sku_config["memory_mb"]
+            cpu_limit = sku_config["cpus"]
+            storage_gb = sku_config["storage_gb"]
+        
+        # Generate credentials
+        cred_mgr = CredentialManager()
+        username = cred_mgr.generate_username()
+        password = cred_mgr.generate_password()
+        
+        # Generate container name
+        if request.name:
+            container_name = f"db-{request.engine}-{request.name}"
+        else:
+            container_name = f"db-{request.engine}-{secrets.token_hex(4)}"
+        
+        # Insert initial record
+        result = await db.execute(text(f'''
+            INSERT INTO "{INSTANCES_TABLE}" (
+                container_id, container_name, database_type, host, port,
+                database_name, username, password, status, created_at,
+                sku, memory_limit_mb, cpu_limit, storage_limit_gb,
+                external_access, tls_enabled
+            )
+            VALUES (
+                :container_id, :container_name, :database_type, :host, :port,
+                :database_name, :username, :password, :status, :created_at,
+                :sku, :memory_limit_mb, :cpu_limit, :storage_limit_gb,
+                :external_access, :tls_enabled
+            )
+            RETURNING id
+        '''), {
+            "container_id": "",
+            "container_name": container_name,
+            "database_type": request.engine,
+            "host": "localhost",
+            "port": adapter.default_port,
+            "database_name": request.database_name,
+            "username": username,
+            "password": password,
+            "status": "creating",
+            "created_at": int(_time.time()),
+            "sku": request.sku,
+            "memory_limit_mb": memory_mb,
+            "cpu_limit": cpu_limit,
+            "storage_limit_gb": storage_gb,
+            "external_access": request.external_access,
+            "tls_enabled": request.tls_enabled
         })
+        instance_id = result.fetchone()[0]
         await db.commit()
         
-        return {"success": True, "message": message, "snapshot_path": snapshot_path}
-    
-    raise HTTPException(status_code=500, detail=message)
-
-
-@router.get("/databases/{database_id}/snapshots")
-async def list_database_snapshots(
-    database_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:read"))
-):
-    """
-    List all snapshots for a database.
-    """
-    result = await db.execute(text("""
-        SELECT id, snapshot_path, snapshot_size, created_at
-        FROM databases_snapshots
-        WHERE database_id = :database_id
-        ORDER BY created_at DESC
-    """), {"database_id": database_id})
-    
-    snapshots = []
-    for row in result.fetchall():
-        snapshots.append({
-            "id": row.id,
-            "path": row.snapshot_path,
-            "size": row.snapshot_size,
-            "created_at": row.created_at,
-        })
-    
-    return {"snapshots": snapshots}
-
-
-@router.post("/databases/{database_id}/restore/{snapshot_id}")
-async def restore_database(
-    database_id: int,
-    snapshot_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:write"))
-):
-    """
-    Restore a database from a snapshot.
-    """
-    # Get database info
-    db_result = await db.execute(text(
-        "SELECT container_name, database_type, database_name, username, password FROM databases_instances WHERE id = :id"
-    ), {"id": database_id})
-    db_row = db_result.fetchone()
-    
-    if not db_row:
-        raise HTTPException(status_code=404, detail="Database not found")
-    
-    # Get backup info
-    snapshot_result = await db.execute(text(
-        "SELECT snapshot_path FROM databases_snapshots WHERE id = :id AND database_id = :database_id"
-    ), {"id": snapshot_id, "database_id": database_id})
-    snapshot_row = snapshot_result.fetchone()
-    
-    if not snapshot_row:
-        raise HTTPException(status_code=404, detail="Snapshot not found")
-    
-    db_type = DatabaseType(db_row.database_type)
-    success, message = await ContainerService.restore_database(
-        db_row.container_name, db_type, db_row.database_name, 
-        db_row.username, db_row.password, snapshot_row.snapshot_path
-    )
-    
-    if success:
-        return {"success": True, "message": message}
-    
-    raise HTTPException(status_code=500, detail=message)
-
-
-@router.delete("/databases/{database_id}/snapshots/{snapshot_id}")
-async def delete_snapshot(
-    database_id: int,
-    snapshot_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:write"))
-):
-    """
-    Delete a snapshot file.
-    """
-    import os
-    
-    result = await db.execute(text(
-        "SELECT snapshot_path FROM databases_snapshots WHERE id = :id AND database_id = :database_id"
-    ), {"id": snapshot_id, "database_id": database_id})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Snapshot not found")
-    
-    # Delete file
-    if os.path.exists(row.snapshot_path):
-        os.remove(row.snapshot_path)
-    
-    # Delete record
-    await db.execute(text("DELETE FROM databases_snapshots WHERE id = :id"), {"id": snapshot_id})
-    await db.commit()
-    
-    return {"success": True, "message": "Snapshot deleted"}
-
-
-@router.get("/databases/{database_id}/export")
-async def export_database(
-    database_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:read"))
-):
-    """
-    Export database to a zip file using database-specific export methods.
-    Returns a downloadable zip file.
-    """
-    import os
-    import tempfile
-    import zipfile
-    from datetime import datetime
-    from fastapi.responses import FileResponse
-    
-    result = await db.execute(text(
-        "SELECT container_name, database_type, database_name, username, password FROM databases_instances WHERE id = :id"
-    ), {"id": database_id})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Database not found")
-    
-    # Create temporary export directory
-    export_dir = tempfile.mkdtemp(prefix="flux_db_export_")
-    
-    try:
-        # Generate export filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        export_filename = f"{row.container_name}_{timestamp}.sql"
+        # Launch background task to create container
+        async def create_container_task():
+            async with get_db_context() as task_db:
+                try:
+                    orchestrator = ContainerOrchestrator()
+                    
+                    # Create container
+                    container_id = await orchestrator.create_container(
+                        engine=request.engine,
+                        container_name=container_name,
+                        username=username,
+                        password=password,
+                        database_name=request.database_name,
+                        memory_mb=memory_mb,
+                        cpu_limit=cpu_limit,
+                        storage_gb=storage_gb,
+                        port=adapter.default_port,
+                        external_access=request.external_access,
+                        tls_enabled=request.tls_enabled,
+                        tls_cert=request.tls_cert,
+                        tls_key=request.tls_key,
+                        vnet_name=request.vnet_name
+                    )
+                    
+                    # Start container
+                    await orchestrator.start_container(container_name)
+                    
+                    # Store credentials
+                    await cred_mgr.store_credentials(
+                        instance_id=instance_id,
+                        username=username,
+                        password=password,
+                        db=task_db
+                    )
+                    
+                    # Update status
+                    await task_db.execute(text(f'''
+                        UPDATE "{INSTANCES_TABLE}"
+                        SET container_id = :container_id, status = :status
+                        WHERE id = :id
+                    '''), {
+                        "container_id": container_id,
+                        "status": "running",
+                        "id": instance_id
+                    })
+                    await task_db.commit()
+                    
+                except Exception as e:
+                    logger.error(f"Error creating container: {e}")
+                    await task_db.execute(text(f'''
+                        UPDATE "{INSTANCES_TABLE}"
+                        SET status = :status, error_message = :error_message
+                        WHERE id = :id
+                    '''), {
+                        "status": "error",
+                        "error_message": str(e),
+                        "id": instance_id
+                    })
+                    await task_db.commit()
         
-        if row.database_type == "mongodb":
-            export_filename = f"{row.container_name}_{timestamp}.archive"
-        elif row.database_type == "redis":
-            export_filename = f"{row.container_name}_{timestamp}.rdb"
+        asyncio.create_task(create_container_task())
         
-        export_path = os.path.join(export_dir, export_filename)
+        return {
+            "id": instance_id,
+            "container_name": container_name,
+            "status": "creating",
+            "message": "Database instance is being created"
+        }
         
-        # Perform database export using backup method
-        db_type = DatabaseType(row.database_type)
-        success, message = await ContainerService.backup_database(
-            row.container_name, db_type, row.database_name, row.username, row.password, export_path
-        )
-        
-        if not success:
-            raise HTTPException(status_code=500, detail=message)
-        
-        # Create zip file
-        zip_filename = f"{row.container_name}_{timestamp}.zip"
-        zip_path = os.path.join(export_dir, zip_filename)
-        
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            zipf.write(export_path, os.path.basename(export_path))
-        
-        # Return zip file as download
-        return FileResponse(
-            path=zip_path,
-            media_type='application/zip',
-            filename=zip_filename,
-            headers={"Content-Disposition": f"attachment; filename={zip_filename}"}
-        )
-    
+    except HTTPException:
+        raise
     except Exception as e:
-        # Clean up on error
-        import shutil
-        if os.path.exists(export_dir):
-            shutil.rmtree(export_dir)
-        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+        logger.error(f"Error creating database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/databases/{database_id}/tables")
-async def list_tables(
-    database_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:read"))
-):
-    """
-    List all tables in the database.
-    """
-    result = await db.execute(text(
-        "SELECT container_name, database_type, database_name, username, password FROM databases_instances WHERE id = :id"
-    ), {"id": database_id})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Database not found")
-    
-    db_type = DatabaseType(row.database_type)
-    tables = await ContainerService.list_database_tables(
-        row.container_name, db_type, row.database_name, row.username, row.password
-    )
-    
-    return {"tables": tables}
+@router.post("/databases/{database_id}/start", dependencies=[Depends(require_permission("databases:write"))])
+async def start_database(database_id: int, db: AsyncSession = Depends(get_db)):
+    """Start a database instance."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name, status
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        
+        # Start container
+        orchestrator = ContainerOrchestrator()
+        await orchestrator.start_container(container_name)
+        
+        # Update status
+        await db.execute(text(f'''
+            UPDATE "{INSTANCES_TABLE}"
+            SET status = :status
+            WHERE id = :id
+        '''), {"status": "running", "id": database_id})
+        await db.commit()
+        
+        return {"message": "Database started successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/databases/{database_id}/tables/{table_name}/schema")
-async def get_table_schema(
-    database_id: int,
-    table_name: str,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:read"))
-):
-    """
-    Get the schema/structure of a specific table.
-    """
-    result = await db.execute(text(
-        "SELECT container_name, database_type, database_name, username, password FROM databases_instances WHERE id = :id"
-    ), {"id": database_id})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Database not found")
-    
-    db_type = DatabaseType(row.database_type)
-    schema = await ContainerService.get_table_schema(
-        row.container_name, db_type, row.database_name, row.username, row.password, table_name
-    )
-    
-    return {"schema": schema}
+@router.post("/databases/{database_id}/stop", dependencies=[Depends(require_permission("databases:write"))])
+async def stop_database(database_id: int, db: AsyncSession = Depends(get_db)):
+    """Stop a database instance."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        
+        # Stop container
+        orchestrator = ContainerOrchestrator()
+        await orchestrator.stop_container(container_name)
+        
+        # Update status
+        await db.execute(text(f'''
+            UPDATE "{INSTANCES_TABLE}"
+            SET status = :status
+            WHERE id = :id
+        '''), {"status": "stopped", "id": database_id})
+        await db.commit()
+        
+        return {"message": "Database stopped successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error stopping database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/databases/{database_id}/tables/{table_name}/data")
-async def get_table_data(
-    database_id: int,
-    table_name: str,
-    limit: int = 10,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_permission("databases:read"))
-):
-    """
-    Get sample data from a specific table.
-    """
-    result = await db.execute(text(
-        "SELECT container_name, database_type, database_name, username, password FROM databases_instances WHERE id = :id"
-    ), {"id": database_id})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Database not found")
-    
-    db_type = DatabaseType(row.database_type)
-    data = await ContainerService.get_table_data(
-        row.container_name, db_type, row.database_name, row.username, row.password, table_name, limit
-    )
-    
-    return {"data": data}
+@router.post("/databases/{database_id}/restart", dependencies=[Depends(require_permission("databases:write"))])
+async def restart_database(database_id: int, db: AsyncSession = Depends(get_db)):
+    """Restart a database instance."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        
+        # Restart container
+        orchestrator = ContainerOrchestrator()
+        await orchestrator.restart_container(container_name)
+        
+        # Update status
+        await db.execute(text(f'''
+            UPDATE "{INSTANCES_TABLE}"
+            SET status = :status
+            WHERE id = :id
+        '''), {"status": "running", "id": database_id})
+        await db.commit()
+        
+        return {"message": "Database restarted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error restarting database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/databases/{database_id}", dependencies=[Depends(require_permission("databases:write"))])
+async def delete_database(database_id: int, db: AsyncSession = Depends(get_db)):
+    """Delete a database instance."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name, container_id
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        
+        # Remove container
+        orchestrator = ContainerOrchestrator()
+        await orchestrator.remove_container(container_name)
+        
+        # Delete from database
+        await db.execute(text(f'''
+            DELETE FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        await db.commit()
+        
+        return {"message": "Database deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/databases/{database_id}/logs", dependencies=[Depends(require_permission("databases:read"))])
+async def get_database_logs(database_id: int, tail: int = 100, db: AsyncSession = Depends(get_db)):
+    """Get database container logs."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        
+        # Get logs
+        orchestrator = ContainerOrchestrator()
+        logs = await orchestrator.get_logs(container_name, tail=tail)
+        
+        return {"logs": logs}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting logs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/databases/{database_id}/metrics", dependencies=[Depends(require_permission("databases:read"))])
+async def get_database_metrics(database_id: int, hours: int = 24, db: AsyncSession = Depends(get_db)):
+    """Get database metrics history."""
+    try:
+        collector = MetricsCollector()
+        metrics = await collector.get_metrics_history(database_id, hours=hours, db=db)
+        
+        return {
+            "instance_id": database_id,
+            "hours": hours,
+            "metrics": metrics
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/databases/{database_id}/stats", dependencies=[Depends(require_permission("databases:read"))])
+async def get_database_stats(database_id: int, db: AsyncSession = Depends(get_db)):
+    """Get current database container stats."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        
+        # Get stats
+        orchestrator = ContainerOrchestrator()
+        stats_output = await orchestrator.get_stats(container_name)
+        
+        # Parse stats output
+        lines = stats_output.strip().split('\n')
+        if len(lines) < 2:
+            raise HTTPException(status_code=500, detail="Invalid stats output")
+        
+        # Parse the data line (skip header)
+        parts = lines[1].split()
+        if len(parts) < 8:
+            raise HTTPException(status_code=500, detail="Invalid stats format")
+        
+        # Extract memory usage
+        mem_usage = parts[2]
+        mem_parts = mem_usage.split('/')
+        mem_used_mb = _parse_mem_value(mem_parts[0].strip())
+        mem_limit_mb = _parse_mem_value(mem_parts[1].strip()) if len(mem_parts) > 1 else 0
+        
+        # Extract CPU percentage
+        cpu_percent = parts[1].strip('%')
+        
+        return {
+            "container_name": container_name,
+            "cpu_percent": float(cpu_percent) if cpu_percent else 0.0,
+            "memory_used_mb": mem_used_mb,
+            "memory_limit_mb": mem_limit_mb,
+            "memory_percent": (mem_used_mb / mem_limit_mb * 100) if mem_limit_mb > 0 else 0.0
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/databases/{database_id}/inspect", dependencies=[Depends(require_permission("databases:read"))])
+async def inspect_database(database_id: int, db: AsyncSession = Depends(get_db)):
+    """Get detailed database container inspection."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        
+        # Inspect container
+        orchestrator = ContainerOrchestrator()
+        inspect_output = await orchestrator.inspect(container_name)
+        
+        # Parse JSON output
+        try:
+            inspect_data = json.loads(inspect_output)
+            if isinstance(inspect_data, list) and len(inspect_data) > 0:
+                inspect_data = inspect_data[0]
+        except json.JSONDecodeError:
+            inspect_data = {"raw": inspect_output}
+        
+        return inspect_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error inspecting container: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/databases/{database_id}/snapshot", dependencies=[Depends(require_permission("databases:write"))])
+async def create_snapshot(database_id: int, db: AsyncSession = Depends(get_db)):
+    """Create a backup/snapshot of the database."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name, database_type
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        database_type = row[1]
+        
+        # Create backup
+        backup_svc = BackupService()
+        backup_id = await backup_svc.create_backup(
+            instance_id=database_id,
+            container_name=container_name,
+            engine=database_type,
+            db=db
+        )
+        
+        return {
+            "snapshot_id": backup_id,
+            "message": "Snapshot created successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating snapshot: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/databases/{database_id}/snapshots", dependencies=[Depends(require_permission("databases:read"))])
+async def list_snapshots(database_id: int, db: AsyncSession = Depends(get_db)):
+    """List all snapshots for a database instance."""
+    try:
+        backup_svc = BackupService()
+        snapshots = await backup_svc.list_backups(instance_id=database_id, db=db)
+        
+        return {
+            "instance_id": database_id,
+            "snapshots": snapshots,
+            "count": len(snapshots)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error listing snapshots: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/databases/{database_id}/restore/{snapshot_id}", dependencies=[Depends(require_permission("databases:write"))])
+async def restore_snapshot(database_id: int, snapshot_id: int, db: AsyncSession = Depends(get_db)):
+    """Restore a database from a snapshot."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name, database_type
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        database_type = row[1]
+        
+        # Restore backup
+        backup_svc = BackupService()
+        await backup_svc.restore_backup(
+            backup_id=snapshot_id,
+            container_name=container_name,
+            engine=database_type,
+            db=db
+        )
+        
+        return {"message": "Snapshot restored successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error restoring snapshot: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/databases/{database_id}/snapshots/{snapshot_id}", dependencies=[Depends(require_permission("databases:write"))])
+async def delete_snapshot(database_id: int, snapshot_id: int, db: AsyncSession = Depends(get_db)):
+    """Delete a snapshot."""
+    try:
+        backup_svc = BackupService()
+        await backup_svc.delete_backup(backup_id=snapshot_id, db=db)
+        
+        return {"message": "Snapshot deleted successfully"}
+        
+    except Exception as e:
+        logger.error(f"Error deleting snapshot: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/databases/{database_id}/export", dependencies=[Depends(require_permission("databases:read"))])
+async def export_database(database_id: int, db: AsyncSession = Depends(get_db)):
+    """Export database as a downloadable archive."""
+    # This is a placeholder - implementation would depend on specific requirements
+    raise HTTPException(status_code=501, detail="Export functionality not yet implemented")
+
+
+@router.get("/databases/{database_id}/tables", dependencies=[Depends(require_permission("databases:read"))])
+async def list_tables(database_id: int, db: AsyncSession = Depends(get_db)):
+    """List tables in the database (for SQL databases)."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name, database_type, database_name, username, password
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        database_type = row[1]
+        database_name = row[2]
+        username = row[3]
+        password = row[4]
+        
+        # Get adapter
+        adapter = get_adapter(database_type)
+        
+        if not adapter.supports_databases:
+            raise HTTPException(status_code=400, detail=f"{database_type} does not support table listing")
+        
+        # Use DatabaseOperations to list tables (this would need to be implemented)
+        # For now, return placeholder
+        raise HTTPException(status_code=501, detail="Table listing not yet implemented")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing tables: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/databases/{database_id}/tables/{table_name}/schema", dependencies=[Depends(require_permission("databases:read"))])
+async def get_table_schema(database_id: int, table_name: str, db: AsyncSession = Depends(get_db)):
+    """Get schema for a specific table."""
+    raise HTTPException(status_code=501, detail="Table schema retrieval not yet implemented")
+
+
+@router.get("/databases/{database_id}/tables/{table_name}/data", dependencies=[Depends(require_permission("databases:read"))])
+async def get_table_data(database_id: int, table_name: str, limit: int = 100, offset: int = 0, db: AsyncSession = Depends(get_db)):
+    """Get data from a specific table."""
+    raise HTTPException(status_code=501, detail="Table data retrieval not yet implemented")
+
+
+@router.get("/databases/{database_id}/health", dependencies=[Depends(require_permission("databases:read"))])
+async def get_database_health(database_id: int, db: AsyncSession = Depends(get_db)):
+    """Get current health status of the database."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name, database_type
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        database_type = row[1]
+        
+        # Check health
+        health_monitor = HealthMonitor()
+        health_status = await health_monitor.check_health(
+            instance_id=database_id,
+            container_name=container_name,
+            engine=database_type,
+            db=db
+        )
+        
+        return health_status
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error checking health: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/databases/{database_id}/credentials/rotate", dependencies=[Depends(require_permission("databases:write"))])
+async def rotate_credentials(database_id: int, db: AsyncSession = Depends(get_db)):
+    """Rotate database credentials."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name, database_type, username
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        database_type = row[1]
+        old_username = row[2]
+        
+        # Rotate password
+        cred_mgr = CredentialManager()
+        new_password = await cred_mgr.rotate_password(
+            instance_id=database_id,
+            container_name=container_name,
+            engine=database_type,
+            username=old_username,
+            db=db
+        )
+        
+        # Update instance record
+        await db.execute(text(f'''
+            UPDATE "{INSTANCES_TABLE}"
+            SET password = :password
+            WHERE id = :id
+        '''), {"password": new_password, "id": database_id})
+        await db.commit()
+        
+        return {
+            "message": "Credentials rotated successfully",
+            "username": old_username,
+            "password": new_password
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error rotating credentials: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/databases/{database_id}/connection-string", dependencies=[Depends(require_permission("databases:read"))])
+async def get_connection_string(database_id: int, db: AsyncSession = Depends(get_db)):
+    """Get the connection string for the database."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT database_type, host, port, database_name, username, password
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        database_type = row[0]
+        host = row[1]
+        port = row[2]
+        database_name = row[3]
+        username = row[4]
+        password = row[5]
+        
+        # Build connection string
+        cred_mgr = CredentialManager()
+        connection_string = cred_mgr.get_connection_string(
+            engine=database_type,
+            host=host,
+            port=port,
+            database_name=database_name,
+            username=username,
+            password=password
+        )
+        
+        return {
+            "connection_string": connection_string,
+            "host": host,
+            "port": port,
+            "database": database_name,
+            "username": username
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting connection string: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/databases/{database_id}/databases", dependencies=[Depends(require_permission("databases:write"))])
+async def create_inner_database(database_id: int, request: CreateInnerDatabaseRequest, db: AsyncSession = Depends(get_db)):
+    """Create a database within the instance (for engines that support it)."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name, database_type, username, password
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        database_type = row[1]
+        username = row[2]
+        password = row[3]
+        
+        # Check if adapter supports databases
+        adapter = get_adapter(database_type)
+        if not adapter.supports_databases:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{database_type} does not support multiple databases"
+            )
+        
+        # Create database
+        db_ops = DatabaseOperations()
+        await db_ops.create_database(
+            container_name=container_name,
+            engine=database_type,
+            database_name=request.name,
+            admin_username=username,
+            admin_password=password
+        )
+        
+        return {
+            "message": f"Database '{request.name}' created successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/databases/{database_id}/databases", dependencies=[Depends(require_permission("databases:read"))])
+async def list_inner_databases(database_id: int, db: AsyncSession = Depends(get_db)):
+    """List databases within the instance."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name, database_type, username, password
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        database_type = row[1]
+        username = row[2]
+        password = row[3]
+        
+        # Check if adapter supports databases
+        adapter = get_adapter(database_type)
+        if not adapter.supports_databases:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{database_type} does not support multiple databases"
+            )
+        
+        # List databases
+        db_ops = DatabaseOperations()
+        databases = await db_ops.list_databases(
+            container_name=container_name,
+            engine=database_type,
+            admin_username=username,
+            admin_password=password
+        )
+        
+        return {
+            "databases": databases,
+            "count": len(databases)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing databases: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/databases/{database_id}/users", dependencies=[Depends(require_permission("databases:write"))])
+async def create_inner_user(database_id: int, request: CreateUserRequest, db: AsyncSession = Depends(get_db)):
+    """Create a user within the instance (for engines that support it)."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name, database_type, username, password
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        database_type = row[1]
+        admin_username = row[2]
+        admin_password = row[3]
+        
+        # Check if adapter supports users
+        adapter = get_adapter(database_type)
+        if not adapter.supports_users:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{database_type} does not support user management"
+            )
+        
+        # Generate password if not provided
+        user_password = request.password
+        if not user_password:
+            cred_mgr = CredentialManager()
+            user_password = cred_mgr.generate_password()
+        
+        # Create user
+        db_ops = DatabaseOperations()
+        await db_ops.create_user(
+            container_name=container_name,
+            engine=database_type,
+            username=request.username,
+            password=user_password,
+            admin_username=admin_username,
+            admin_password=admin_password,
+            permissions=request.permissions
+        )
+        
+        return {
+            "message": f"User '{request.username}' created successfully",
+            "username": request.username,
+            "password": user_password
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating user: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/databases/{database_id}/users", dependencies=[Depends(require_permission("databases:read"))])
+async def list_inner_users(database_id: int, db: AsyncSession = Depends(get_db)):
+    """List users within the instance."""
+    try:
+        # Get instance
+        result = await db.execute(text(f'''
+            SELECT container_name, database_type, username, password
+            FROM "{INSTANCES_TABLE}"
+            WHERE id = :id
+        '''), {"id": database_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        container_name = row[0]
+        database_type = row[1]
+        admin_username = row[2]
+        admin_password = row[3]
+        
+        # Check if adapter supports users
+        adapter = get_adapter(database_type)
+        if not adapter.supports_users:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{database_type} does not support user management"
+            )
+        
+        # List users
+        db_ops = DatabaseOperations()
+        users = await db_ops.list_users(
+            container_name=container_name,
+            engine=database_type,
+            admin_username=admin_username,
+            admin_password=admin_password
+        )
+        
+        return {
+            "users": users,
+            "count": len(users)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing users: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

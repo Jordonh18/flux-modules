@@ -1,8 +1,10 @@
 {
+  "module_id": "620600",
   "name": "databases",
+  "table_prefix": "620600_databases",
   "display_name": "Database Management",
-  "version": "1.0.0",
-  "description": "Database management and exploration tools for Flux",
+  "version": "2.0.0",
+  "description": "Database-as-a-Service management platform for Flux with 25+ database engine support, container orchestration via Podman, health monitoring, backup/restore, and metrics collection",
   "author": "Flux Team",
   "license": "MIT",
   "min_app_version": "1.0.0",
@@ -14,14 +16,14 @@
     {
       "name": "databases:read",
       "display_name": "View Databases",
-      "description": "View databases and their status",
+      "description": "View databases, metrics, and health status",
       "resource": "databases",
       "action": "read"
     },
     {
       "name": "databases:write",
       "display_name": "Manage Databases",
-      "description": "Create, start, stop, and delete databases",
+      "description": "Create, start, stop, delete, backup, and restore databases",
       "resource": "databases",
       "action": "write"
     }
@@ -38,6 +40,6 @@
   "dependencies": [],
   "frontend": {
     "enabled": true,
-    "entry": "frontend/pages/DatabasesPage.tsx"
+    "entry": "frontend/pages/DatabasesListPage.tsx"
   }
 }

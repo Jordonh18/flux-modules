@@ -1,19 +1,20 @@
 {
   "name": "Flux Module Registry",
   "description": "Official module registry for Flux",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "author": "Flux Team",
   "website": "https://github.com/Jordonh18/flux-modules",
   "modules": [
     {
+      "module_id": "620600",
       "name": "databases",
       "path": "modules/databases",
-      "display_name": "Databases",
-      "version": "1.0.0",
-      "description": "Database management and exploration tools for Flux",
+      "display_name": "Database Management",
+      "version": "2.0.0",
+      "description": "Database-as-a-Service management platform for Flux with 25+ database engine support",
       "author": "Flux Team",
       "min_app_version": "1.0.0",
-      "tags": ["database", "admin", "management"]
+      "tags": ["database", "admin", "management", "dbaas", "containers", "podman"]
     }
   ]
 }
