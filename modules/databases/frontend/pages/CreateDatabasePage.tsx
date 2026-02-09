@@ -34,11 +34,11 @@ export default function CreateDatabasePage() {
 
   const createMutation = useMutation({
     mutationFn: (data: CreateDatabaseRequest) => 
-      api.post('/modules/databases/databases', data),
+      api.post('/api/modules/databases/databases', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['databases'] });
       toast.success('Database creation started');
-      navigate('/databases');
+      navigate('/modules/databases');
     },
     onError: (err: any) => {
       toast.error(err.response?.data?.detail || 'Failed to create database');
@@ -254,7 +254,7 @@ export default function CreateDatabasePage() {
         <CardFooter className="flex justify-between border-t pt-6">
           <Button 
             variant="outline" 
-            onClick={step === 1 ? () => navigate('/databases') : handleBack}
+            onClick={step === 1 ? () => navigate('/modules/databases') : handleBack}
             disabled={createMutation.isPending}
           >
             {step === 1 ? 'Cancel' : <><ChevronLeft className="mr-2 h-4 w-4" /> Back</>}

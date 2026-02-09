@@ -25,7 +25,7 @@ export function EngineSelector({ selected, onSelect }: EngineSelectorProps) {
   const { data: engines, isLoading } = useQuery<EngineInfo[]>({
     queryKey: ['database-engines'],
     queryFn: async () => {
-      const response = await api.get('/modules/databases/engines');
+      const response = await api.get('/api/modules/databases/engines');
       return response.data;
     },
   });

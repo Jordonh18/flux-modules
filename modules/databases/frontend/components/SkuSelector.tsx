@@ -28,7 +28,7 @@ export function SkuSelector({ selected, onSelect }: SkuSelectorProps) {
   const { data: systemInfo, isLoading } = useQuery<SystemInfo>({
     queryKey: ['system-info'],
     queryFn: async () => {
-      const response = await api.get('/modules/databases/system-info');
+      const response = await api.get('/api/modules/databases/system-info');
       // Fallback/transform if needed, but assuming direct match for now
       return response.data;
     },
