@@ -127,6 +127,18 @@ function DatabasesPageContent() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [showPassword, setShowPassword] = useState<number | null>(null);
 
+  // Helper to safely format dates
+  const formatDate = (dateStr: string | undefined) => {
+    if (!dateStr) return 'Unknown';
+    try {
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) return 'Unknown';
+      return date.toLocaleDateString();
+    } catch {
+      return 'Unknown';
+    }
+  };
+
   // Queries
   const { data: podmanStatus, isLoading: podmanLoading } = useQuery({
     queryKey: ['databases', 'podman-status'],
@@ -477,7 +489,7 @@ function DatabasesPageContent() {
                         <TableCell className="px-4">
                           <div>
                             <p className="font-medium">{db.name}</p>
-                            <p className="text-xs text-muted-foreground">Created {new Date(db.created_at).toLocaleDateString()}</p>
+                            <p className="text-xs text-muted-foreground">Created {formatDate(db.created_at)}</p>
                           </div>
                         </TableCell>
                         <TableCell className="px-4">

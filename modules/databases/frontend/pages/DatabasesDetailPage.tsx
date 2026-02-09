@@ -274,7 +274,13 @@ function DatabaseDetailPageContent() {
   const [metricsRange, setMetricsRange] = useState('1h');
   const logsEndRef = useRef<HTMLDivElement>(null);
 
-  // Queries
+  // Queries - fetch engines first for type info
+  const { data: engines = [] } = useQuery({
+    queryKey: ['databases', 'engines'],
+    queryFn: detailApi.getEngines,
+    staleTime: 300000, // Cache for 5 minutes
+  });
+
   const { data: database, isLoading: dbLoading } = useQuery({
     queryKey: ['databases', 'detail', databaseId],
     queryFn: () => detailApi.getDatabase(databaseId),
