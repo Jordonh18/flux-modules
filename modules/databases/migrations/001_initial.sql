@@ -34,15 +34,15 @@ CREATE INDEX IF NOT EXISTS idx_databases_instances_container_name ON databases_i
 CREATE INDEX IF NOT EXISTS idx_databases_instances_type ON databases_instances(database_type);
 CREATE INDEX IF NOT EXISTS idx_databases_instances_status ON databases_instances(status);
 
--- Backup records
-CREATE TABLE IF NOT EXISTS databases_backups (
+-- Snapshot records
+CREATE TABLE IF NOT EXISTS databases_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     database_id INTEGER NOT NULL,
-    backup_path TEXT NOT NULL,
-    backup_size INTEGER DEFAULT 0,
+    snapshot_path TEXT NOT NULL,
+    snapshot_size INTEGER DEFAULT 0,
     notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (database_id) REFERENCES databases_instances(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_databases_backups_database_id ON databases_backups(database_id);
+CREATE INDEX IF NOT EXISTS idx_databases_snapshots_database_id ON databases_snapshots(database_id);

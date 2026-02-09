@@ -164,10 +164,10 @@ const DATABASE_TYPES: Record<string, { label: string; icon: string; description:
 };
 
 const chartColors = {
-  cpu: 'hsl(var(--chart-1, 217 91% 60%))',
-  memory: 'hsl(var(--chart-2, 142 71% 45%))',
-  connections: 'hsl(var(--chart-3, 33 93% 54%))',
-  cache: 'hsl(var(--chart-4, 271 91% 65%))',
+  cpu: '#3b82f6',
+  memory: '#22c55e',
+  connections: '#f97316',
+  cache: '#a855f7',
 };
 
 // API functions
@@ -536,11 +536,6 @@ function DatabaseDetailPageContent() {
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
-          {typeInfo?.icon && (
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-xl">
-              {typeInfo.icon}
-            </div>
-          )}
           <div>
             <h1 className="text-2xl font-bold">{database.name}</h1>
             <p className="text-muted-foreground text-sm">{typeInfo?.description}</p>
