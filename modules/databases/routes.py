@@ -747,26 +747,133 @@ async def delete_database(
     return {"success": True, "message": "Database deleted"}
 
 
+# ============================================================================
+# In-memory metrics history ring buffer (per database, max 120 points ≈ 10min at 5s intervals)
+# ============================================================================
+import time as _time
+from collections import deque
+
+_metrics_history: dict[int, deque] = {}
+_METRICS_MAX_POINTS = 120
+
+
 @router.get("/databases/{database_id}/logs")
 async def get_database_logs(
     database_id: int,
-    lines: int = 100,
+    lines: int = 200,
+    level: str = "",
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_permission("databases:read"))
 ):
     """
-    Get logs from a database container.
+    Get structured database logs with timestamp, level, and message.
+    Optionally filter by level (info, warning, error, debug).
     """
     result = await db.execute(text(
-        "SELECT container_name FROM databases_instances WHERE id = :id"
+        "SELECT container_name, database_type FROM databases_instances WHERE id = :id"
     ), {"id": database_id})
     row = result.fetchone()
-    
+
     if not row:
         raise HTTPException(status_code=404, detail="Database not found")
-    
-    logs = await ContainerService.get_container_logs(row.container_name, lines)
-    return {"logs": logs}
+
+    db_type = DatabaseType(row.database_type)
+    entries = await ContainerService.get_database_native_logs(row.container_name, db_type, lines)
+
+    if level:
+        entries = [e for e in entries if e.get("level") == level.lower()]
+
+    return {"entries": entries}
+
+
+@router.get("/databases/{database_id}/metrics")
+async def get_database_metrics(
+    database_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("databases:read"))
+):
+    """
+    Get current database performance metrics and append to history.
+    Returns both current metrics and the time-series history.
+    """
+    result = await db.execute(text(
+        "SELECT container_name, database_type, database_name, username, password "
+        "FROM databases_instances WHERE id = :id"
+    ), {"id": database_id})
+    row = result.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Database not found")
+
+    db_type = DatabaseType(row.database_type)
+
+    # Get resource stats (CPU / memory) and DB-specific metrics in parallel
+    stats_task = ContainerService.get_container_stats(row.container_name)
+    metrics_task = ContainerService.get_database_metrics(
+        row.container_name, db_type, row.database_name, row.username, row.password
+    )
+    container_stats, db_metrics = await asyncio.gather(stats_task, metrics_task)
+
+    # Parse CPU / memory from container stats
+    cpu_pct = 0.0
+    mem_used_mb = 0.0
+    mem_limit_mb = 0.0
+    mem_pct = 0.0
+    if not container_stats.get("error"):
+        try:
+            cpu_pct = float(str(container_stats.get("cpu_percent", "0")).replace("%", ""))
+        except ValueError:
+            pass
+        try:
+            mem_str = str(container_stats.get("mem_usage", "0B / 0B"))
+            parts = mem_str.split("/")
+            mem_used_mb = _parse_mem_value(parts[0].strip())
+            mem_limit_mb = _parse_mem_value(parts[1].strip()) if len(parts) > 1 else 0
+            mem_pct = float(str(container_stats.get("mem_percent", "0")).replace("%", ""))
+        except (ValueError, IndexError):
+            pass
+
+    current = {
+        "timestamp": _time.time(),
+        "cpu_percent": round(cpu_pct, 2),
+        "memory_used_mb": round(mem_used_mb, 1),
+        "memory_limit_mb": round(mem_limit_mb, 1),
+        "memory_percent": round(mem_pct, 2),
+        **db_metrics,
+    }
+
+    # Append to ring buffer
+    if database_id not in _metrics_history:
+        _metrics_history[database_id] = deque(maxlen=_METRICS_MAX_POINTS)
+    _metrics_history[database_id].append(current)
+
+    return {
+        "current": current,
+        "history": list(_metrics_history[database_id]),
+    }
+
+
+def _parse_mem_value(s: str) -> float:
+    """Parse a memory string like '123.4MiB' or '1.2GiB' into MB."""
+    s = s.strip()
+    try:
+        if s.lower().endswith("gib"):
+            return float(s[:-3]) * 1024
+        elif s.lower().endswith("gb"):
+            return float(s[:-2]) * 1024
+        elif s.lower().endswith("mib"):
+            return float(s[:-3])
+        elif s.lower().endswith("mb"):
+            return float(s[:-2])
+        elif s.lower().endswith("kib"):
+            return float(s[:-3]) / 1024
+        elif s.lower().endswith("kb"):
+            return float(s[:-2]) / 1024
+        elif s.lower().endswith("b"):
+            return float(s[:-1]) / (1024 * 1024)
+        return float(s)
+    except ValueError:
+        return 0.0
 
 
 @router.get("/databases/{database_id}/stats")

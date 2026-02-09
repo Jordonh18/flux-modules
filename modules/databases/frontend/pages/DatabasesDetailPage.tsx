@@ -8,7 +8,7 @@
  * - Settings: Database configuration
  */
 
-import { memo, useState, useEffect, useRef } from 'react';
+import { memo, useState, useEffect, useRef, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
@@ -19,6 +19,8 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   AlertCircle,
   ArrowLeft,
@@ -43,6 +45,9 @@ import {
   Cpu,
   MemoryStick,
   Network,
+  Activity,
+  Filter,
+  BarChart3,
 } from 'lucide-react';
 import { useDocumentTitle } from '@/hooks/use-document-title';
 import { toast } from 'sonner';
@@ -56,6 +61,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 
 // Types
 interface DatabaseInfo {
@@ -127,6 +141,31 @@ interface Snapshot {
   created_at: string;
 }
 
+interface LogEntry {
+  timestamp: string;
+  level: 'info' | 'warning' | 'error' | 'debug';
+  message: string;
+}
+
+interface MetricsPoint {
+  timestamp: number;
+  cpu_percent: number;
+  memory_used_mb: number;
+  memory_limit_mb: number;
+  memory_percent: number;
+  connections: number;
+  active_queries: number;
+  cache_hit_ratio: number | null;
+  total_transactions: number | null;
+  uptime_seconds: number | null;
+  slow_queries: number | null;
+}
+
+interface MetricsResponse {
+  current: MetricsPoint;
+  history: MetricsPoint[];
+}
+
 // Database type options
 const DATABASE_TYPES: Record<string, { label: string; icon: string; description: string }> = {
   postgresql: { label: 'PostgreSQL', icon: '🐘', description: 'Advanced open-source relational database' },
@@ -144,8 +183,10 @@ const detailApi = {
     api.get<ContainerStats>(`/modules/databases/databases/${id}/stats`).then(r => r.data),
   getInspect: (id: number) => 
     api.get<InspectInfo>(`/modules/databases/databases/${id}/inspect`).then(r => r.data),
-  getLogs: (id: number, lines = 200) => 
-    api.get<{ logs: string }>(`/modules/databases/databases/${id}/logs?lines=${lines}`).then(r => r.data),
+  getLogs: (id: number, lines = 200, level = '') => 
+    api.get<{ entries: LogEntry[] }>(`/modules/databases/databases/${id}/logs?lines=${lines}${level ? `&level=${level}` : ''}`).then(r => r.data),
+  getMetrics: (id: number) =>
+    api.get<MetricsResponse>(`/modules/databases/databases/${id}/metrics`).then(r => r.data),
   getSnapshots: (id: number) => 
     api.get<{ snapshots: Snapshot[] }>(`/modules/databases/databases/${id}/snapshots`).then(r => r.data),
   createSnapshot: (id: number) => 
@@ -182,6 +223,27 @@ function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleString();
 }
 
+function formatLogTimestamp(ts: string): string {
+  try {
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return ts.slice(0, 23);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) +
+      '.' + String(d.getMilliseconds()).padStart(3, '0');
+  } catch {
+    return ts.slice(0, 23);
+  }
+}
+
+function formatUptime(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h < 24) return `${h}h ${m}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h % 24}h`;
+}
+
 function DatabaseDetailPageContent() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -192,6 +254,8 @@ function DatabaseDetailPageContent() {
   const [activeTab, setActiveTab] = useState('overview');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [restoreDialogSnapshot, setRestoreDialogSnapshot] = useState<Snapshot | null>(null);
+  const [logLevelFilter, setLogLevelFilter] = useState('all');
+  const [logSearch, setLogSearch] = useState('');
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   // Queries
@@ -204,13 +268,6 @@ function DatabaseDetailPageContent() {
 
   useDocumentTitle(database?.name ? ` Database - ${database.name}` : 'Database Details');
 
-  const { data: stats, refetch: refetchStats } = useQuery({
-    queryKey: ['databases', 'stats', databaseId],
-    queryFn: () => detailApi.getStats(databaseId),
-    enabled: databaseId > 0 && database?.status === 'running',
-    refetchInterval: 5000,
-  });
-
   const { data: inspect } = useQuery({
     queryKey: ['databases', 'inspect', databaseId],
     queryFn: () => detailApi.getInspect(databaseId),
@@ -219,10 +276,25 @@ function DatabaseDetailPageContent() {
   });
 
   const { data: logsData, refetch: refetchLogs, isLoading: logsLoading } = useQuery({
-    queryKey: ['databases', 'logs', databaseId],
-    queryFn: () => detailApi.getLogs(databaseId, 500),
+    queryKey: ['databases', 'logs', databaseId, logLevelFilter],
+    queryFn: () => detailApi.getLogs(databaseId, 500, logLevelFilter === 'all' ? '' : logLevelFilter),
     enabled: databaseId > 0 && activeTab === 'logs',
-    refetchInterval: activeTab === 'logs' ? 2000 : false,
+    refetchInterval: activeTab === 'logs' ? 3000 : false,
+  });
+
+  // Filter logs by search term client-side
+  const filteredLogs = useMemo(() => {
+    const entries = logsData?.entries || [];
+    if (!logSearch) return entries;
+    const q = logSearch.toLowerCase();
+    return entries.filter(e => e.message.toLowerCase().includes(q));
+  }, [logsData, logSearch]);
+
+  const { data: metricsData } = useQuery({
+    queryKey: ['databases', 'metrics', databaseId],
+    queryFn: () => detailApi.getMetrics(databaseId),
+    enabled: databaseId > 0 && database?.status === 'running' && (activeTab === 'metrics' || activeTab === 'overview'),
+    refetchInterval: (activeTab === 'metrics' || activeTab === 'overview') ? 5000 : false,
   });
 
   // Auto-scroll logs to bottom when updated
@@ -352,7 +424,7 @@ function DatabaseDetailPageContent() {
   const restoreMutation = useMutation({
     mutationFn: (snapshotId: number) => detailApi.restoreSnapshot(databaseId, snapshotId),
     onSuccess: () => {
-      setRestoreDialogBackup(null);
+      setRestoreDialogSnapshot(null);
       toast.success('Database restored successfully');
     },
     onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to restore backup'),
@@ -497,6 +569,10 @@ function DatabaseDetailPageContent() {
           <TabsTrigger value="logs" className="flex items-center gap-2">
             <ScrollText className="h-4 w-4" />
             Logs
+          </TabsTrigger>
+          <TabsTrigger value="metrics" className="flex items-center gap-2">
+            <BarChart3 className="h-4 w-4" />
+            Metrics
           </TabsTrigger>
           <TabsTrigger value="snapshots" className="flex items-center gap-2">
             <HardDrive className="h-4 w-4" />
@@ -730,14 +806,11 @@ function DatabaseDetailPageContent() {
             </Card>
 
             {/* Quick Stats */}
-            {isRunning && stats && !stats.error && (
+            {isRunning && metricsData?.current && (
               <Card>
                 <CardHeader>
                   <CardTitle className="text-lg flex items-center justify-between">
-                    Quick Stats
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => refetchStats()}>
-                      <RefreshCw className="h-3 w-3" />
-                    </Button>
+                    Performance
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2">
@@ -745,29 +818,44 @@ function DatabaseDetailPageContent() {
                     <span className="text-sm text-muted-foreground flex items-center gap-2">
                       <Cpu className="h-4 w-4" /> CPU
                     </span>
-                    <span className="font-mono">{stats.cpu_percent}</span>
+                    <span className="font-mono">{metricsData.current.cpu_percent}%</span>
                   </div>
                   <Separator />
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground flex items-center gap-2">
                       <MemoryStick className="h-4 w-4" /> Memory
                     </span>
-                    <span className="font-mono">{stats.mem_usage}</span>
+                    <span className="font-mono">{metricsData.current.memory_used_mb.toFixed(0)} / {metricsData.current.memory_limit_mb.toFixed(0)} MB</span>
                   </div>
                   <Separator />
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground flex items-center gap-2">
-                      <Network className="h-4 w-4" /> Network I/O
+                      <Activity className="h-4 w-4" /> Connections
                     </span>
-                    <span className="font-mono text-sm">{stats.net_io}</span>
+                    <span className="font-mono">{metricsData.current.connections}</span>
                   </div>
-                  <Separator />
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground flex items-center gap-2">
-                      <HardDrive className="h-4 w-4" /> Block I/O
-                    </span>
-                    <span className="font-mono text-sm">{stats.block_io}</span>
-                  </div>
+                  {metricsData.current.cache_hit_ratio != null && (
+                    <>
+                      <Separator />
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-muted-foreground flex items-center gap-2">
+                          <BarChart3 className="h-4 w-4" /> Cache Hit Ratio
+                        </span>
+                        <span className="font-mono">{metricsData.current.cache_hit_ratio}%</span>
+                      </div>
+                    </>
+                  )}
+                  {metricsData.current.uptime_seconds != null && (
+                    <>
+                      <Separator />
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-muted-foreground flex items-center gap-2">
+                          <Clock className="h-4 w-4" /> Uptime
+                        </span>
+                        <span className="font-mono text-sm">{formatUptime(metricsData.current.uptime_seconds)}</span>
+                      </div>
+                    </>
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -778,28 +866,278 @@ function DatabaseDetailPageContent() {
         <TabsContent value="logs" className="space-y-4">
           <Card className="w-full">
             <CardHeader>
-              <CardTitle className="text-lg flex items-center justify-between">
-                Database Logs
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg">Database Logs</CardTitle>
+                  <CardDescription>Structured server-side logs, auto-refreshes every 3 seconds</CardDescription>
+                </div>
                 <Button variant="outline" size="sm" onClick={() => refetchLogs()} disabled={logsLoading}>
                   {logsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                   <span className="ml-2">Refresh</span>
                 </Button>
-              </CardTitle>
-              <CardDescription>Last 500 lines, auto-refreshes every 2 seconds</CardDescription>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search logs..."
+                    value={logSearch}
+                    onChange={(e) => setLogSearch(e.target.value)}
+                    className="pl-8 h-9"
+                  />
+                </div>
+                <Select value={logLevelFilter} onValueChange={setLogLevelFilter}>
+                  <SelectTrigger className="w-[130px] h-9">
+                    <Filter className="h-3.5 w-3.5 mr-2" />
+                    <SelectValue placeholder="All levels" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All levels</SelectItem>
+                    <SelectItem value="error">Error</SelectItem>
+                    <SelectItem value="warning">Warning</SelectItem>
+                    <SelectItem value="info">Info</SelectItem>
+                    <SelectItem value="debug">Debug</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </CardHeader>
             <CardContent>
-              <div className="overflow-hidden min-w-0 rounded-md border bg-muted">
+              <div className="overflow-hidden min-w-0 rounded-md border">
                 <ScrollArea className="max-h-[70vh] w-full">
-                  <div className="p-4">
-                    <pre className="text-xs text-foreground font-mono whitespace-pre-wrap break-all leading-relaxed">
-                      {logsData?.logs || 'No logs available'}
-                    </pre>
+                  <div className="divide-y">
+                    {filteredLogs.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                        <ScrollText className="h-10 w-10 mb-3 opacity-50" />
+                        <p className="text-sm">No log entries found</p>
+                      </div>
+                    ) : (
+                      filteredLogs.map((entry, i) => (
+                        <div key={i} className="flex items-start gap-3 px-3 py-1.5 hover:bg-muted/50 text-xs font-mono">
+                          <span className="text-muted-foreground whitespace-nowrap shrink-0 w-[155px]">
+                            {entry.timestamp ? formatLogTimestamp(entry.timestamp) : '—'}
+                          </span>
+                          <Badge
+                            variant={entry.level === 'error' ? 'destructive' : 'outline'}
+                            className={cn(
+                              'text-[10px] px-1.5 py-0 shrink-0 w-[58px] justify-center',
+                              entry.level === 'warning' && 'border-yellow-500/50 text-yellow-600 dark:text-yellow-400',
+                              entry.level === 'debug' && 'border-blue-500/50 text-blue-600 dark:text-blue-400',
+                              entry.level === 'info' && 'text-muted-foreground',
+                            )}
+                          >
+                            {entry.level}
+                          </Badge>
+                          <span className="text-foreground break-all">{entry.message}</span>
+                        </div>
+                      ))
+                    )}
                     <div ref={logsEndRef} />
                   </div>
                 </ScrollArea>
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Metrics Tab */}
+        <TabsContent value="metrics" className="space-y-4">
+          {!isRunning ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                <BarChart3 className="h-12 w-12 mb-4 opacity-50" />
+                <p>Start the database to view metrics</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              {/* Summary cards */}
+              {metricsData?.current && (
+                <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
+                  <Card>
+                    <CardContent className="pt-4 pb-3 px-4">
+                      <p className="text-xs text-muted-foreground mb-1">CPU Usage</p>
+                      <p className="text-2xl font-bold">{metricsData.current.cpu_percent}%</p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardContent className="pt-4 pb-3 px-4">
+                      <p className="text-xs text-muted-foreground mb-1">Memory</p>
+                      <p className="text-2xl font-bold">{metricsData.current.memory_percent.toFixed(1)}%</p>
+                      <p className="text-xs text-muted-foreground">{metricsData.current.memory_used_mb.toFixed(0)} / {metricsData.current.memory_limit_mb.toFixed(0)} MB</p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardContent className="pt-4 pb-3 px-4">
+                      <p className="text-xs text-muted-foreground mb-1">Connections</p>
+                      <p className="text-2xl font-bold">{metricsData.current.connections}</p>
+                      <p className="text-xs text-muted-foreground">{metricsData.current.active_queries} active</p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardContent className="pt-4 pb-3 px-4">
+                      <p className="text-xs text-muted-foreground mb-1">Cache Hit Ratio</p>
+                      <p className="text-2xl font-bold">{metricsData.current.cache_hit_ratio != null ? `${metricsData.current.cache_hit_ratio}%` : '—'}</p>
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
+
+              {/* Charts */}
+              {metricsData?.history && metricsData.history.length > 1 && (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {/* CPU Chart */}
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium">CPU Usage</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="h-[200px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={metricsData.history}>
+                            <defs>
+                              <linearGradient id="cpuGrad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="hsl(var(--chart-1))" stopOpacity={0.3} />
+                                <stop offset="95%" stopColor="hsl(var(--chart-1))" stopOpacity={0} />
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                            <XAxis
+                              dataKey="timestamp"
+                              tickFormatter={(v) => new Date(v * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                              tick={{ fontSize: 10 }}
+                              className="text-muted-foreground"
+                            />
+                            <YAxis domain={[0, 'auto']} tick={{ fontSize: 10 }} tickFormatter={(v) => `${v}%`} className="text-muted-foreground" />
+                            <Tooltip
+                              labelFormatter={(v) => new Date(v * 1000).toLocaleTimeString()}
+                              formatter={(v: number) => [`${v.toFixed(2)}%`, 'CPU']}
+                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))' }}
+                            />
+                            <Area type="monotone" dataKey="cpu_percent" stroke="hsl(var(--chart-1))" fill="url(#cpuGrad)" strokeWidth={2} dot={false} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Memory Chart */}
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium">Memory Usage</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="h-[200px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={metricsData.history}>
+                            <defs>
+                              <linearGradient id="memGrad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="hsl(var(--chart-2))" stopOpacity={0.3} />
+                                <stop offset="95%" stopColor="hsl(var(--chart-2))" stopOpacity={0} />
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                            <XAxis
+                              dataKey="timestamp"
+                              tickFormatter={(v) => new Date(v * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                              tick={{ fontSize: 10 }}
+                              className="text-muted-foreground"
+                            />
+                            <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `${v} MB`} className="text-muted-foreground" />
+                            <Tooltip
+                              labelFormatter={(v) => new Date(v * 1000).toLocaleTimeString()}
+                              formatter={(v: number) => [`${v.toFixed(1)} MB`, 'Memory']}
+                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))' }}
+                            />
+                            <Area type="monotone" dataKey="memory_used_mb" stroke="hsl(var(--chart-2))" fill="url(#memGrad)" strokeWidth={2} dot={false} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Connections Chart */}
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium">Connections</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="h-[200px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={metricsData.history}>
+                            <defs>
+                              <linearGradient id="connGrad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="hsl(var(--chart-3))" stopOpacity={0.3} />
+                                <stop offset="95%" stopColor="hsl(var(--chart-3))" stopOpacity={0} />
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                            <XAxis
+                              dataKey="timestamp"
+                              tickFormatter={(v) => new Date(v * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                              tick={{ fontSize: 10 }}
+                              className="text-muted-foreground"
+                            />
+                            <YAxis allowDecimals={false} tick={{ fontSize: 10 }} className="text-muted-foreground" />
+                            <Tooltip
+                              labelFormatter={(v) => new Date(v * 1000).toLocaleTimeString()}
+                              formatter={(v: number) => [v, 'Connections']}
+                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))' }}
+                            />
+                            <Area type="monotone" dataKey="connections" stroke="hsl(var(--chart-3))" fill="url(#connGrad)" strokeWidth={2} dot={false} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Cache Hit Ratio Chart */}
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium">Cache Hit Ratio</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="h-[200px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={metricsData.history}>
+                            <defs>
+                              <linearGradient id="cacheGrad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="hsl(var(--chart-4))" stopOpacity={0.3} />
+                                <stop offset="95%" stopColor="hsl(var(--chart-4))" stopOpacity={0} />
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                            <XAxis
+                              dataKey="timestamp"
+                              tickFormatter={(v) => new Date(v * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                              tick={{ fontSize: 10 }}
+                              className="text-muted-foreground"
+                            />
+                            <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} tickFormatter={(v) => `${v}%`} className="text-muted-foreground" />
+                            <Tooltip
+                              labelFormatter={(v) => new Date(v * 1000).toLocaleTimeString()}
+                              formatter={(v: number | null) => [v != null ? `${v}%` : '—', 'Cache Hit']}
+                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))' }}
+                            />
+                            <Area type="monotone" dataKey="cache_hit_ratio" stroke="hsl(var(--chart-4))" fill="url(#cacheGrad)" strokeWidth={2} dot={false} connectNulls />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
+
+              {metricsData?.history && metricsData.history.length <= 1 && (
+                <Card>
+                  <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                    <Loader2 className="h-8 w-8 mb-3 animate-spin opacity-50" />
+                    <p className="text-sm">Collecting metrics data...</p>
+                    <p className="text-xs mt-1">Charts will appear after a few data points are recorded</p>
+                  </CardContent>
+                </Card>
+              )}
+            </>
+          )}
         </TabsContent>
 
         {/* Snapshots Tab */}

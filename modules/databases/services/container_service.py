@@ -761,7 +761,240 @@ class ContainerService:
             return stdout.decode() + stderr.decode()
         except Exception as e:
             return f"Error getting logs: {str(e)}"
-    
+
+    @staticmethod
+    async def get_database_native_logs(name_or_id: str, db_type: DatabaseType, lines: int = 200) -> list[dict]:
+        """Get structured database logs parsed from container output."""
+        import re
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "podman", "logs", "--tail", str(lines), "--timestamps", name_or_id,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await result.communicate()
+            raw = (stdout.decode() + stderr.decode()).strip()
+
+            if not raw:
+                return []
+
+            entries = []
+            for line in raw.split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                entry = ContainerService._parse_log_line(line, db_type)
+                if entry:
+                    entries.append(entry)
+            return entries[-lines:]
+        except Exception as e:
+            return [{"timestamp": "", "level": "error", "message": f"Error reading logs: {str(e)}"}]
+
+    @staticmethod
+    def _parse_log_line(line: str, db_type: DatabaseType) -> Optional[dict]:
+        """Parse a log line into structured {timestamp, level, message} based on database type."""
+        import re
+
+        # Podman --timestamps prepends: 2024-01-15T10:30:00.123456789+00:00 or ...Z
+        podman_ts = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+[Z+\-\d:]*)\s+(.*)", line)
+        if podman_ts:
+            timestamp = podman_ts.group(1)[:23]
+            rest = podman_ts.group(2)
+        else:
+            timestamp = ""
+            rest = line
+
+        if not rest.strip():
+            return None
+
+        level = "info"
+        message = rest
+
+        if db_type == DatabaseType.POSTGRESQL:
+            pg = re.match(
+                r"(?:\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[\.\d]*\s+\w+\s*)?\[\d+\]\s*"
+                r"(LOG|ERROR|WARNING|FATAL|PANIC|DEBUG\d?|INFO|NOTICE|STATEMENT|HINT|DETAIL|CONTEXT):\s*(.*)",
+                rest, re.IGNORECASE
+            )
+            if pg:
+                lvl = pg.group(1).upper()
+                message = pg.group(2)
+                level = {"LOG": "info", "ERROR": "error", "WARNING": "warning", "FATAL": "error",
+                         "PANIC": "error", "INFO": "info", "NOTICE": "info", "STATEMENT": "debug",
+                         "HINT": "info", "DETAIL": "info", "CONTEXT": "info"}.get(lvl, "info")
+                if lvl.startswith("DEBUG"):
+                    level = "debug"
+
+        elif db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB):
+            mysql = re.match(
+                r"(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[\.\d]*Z?\s*)?\d*\s*"
+                r"\[(System|Warning|Error|Note)\]\s*(?:\[[\w-]+\]\s*)*(?:\[[\w.]+\]\s*)*(.*)",
+                rest, re.IGNORECASE
+            )
+            if mysql:
+                sev = (mysql.group(1) or "").lower()
+                message = mysql.group(2)
+                level = {"system": "info", "warning": "warning", "error": "error", "note": "info"}.get(sev, "info")
+
+        elif db_type == DatabaseType.MONGODB:
+            try:
+                doc = json.loads(rest)
+                ts = doc.get("t", {})
+                if isinstance(ts, dict):
+                    timestamp = ts.get("$date", timestamp)
+                sev = doc.get("s", "I")
+                comp = doc.get("c", "")
+                msg = doc.get("msg", rest)
+                message = f"[{comp}] {msg}" if comp else msg
+                level = {"I": "info", "W": "warning", "E": "error", "F": "error",
+                         "D": "debug", "D1": "debug", "D2": "debug"}.get(sev, "info")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        elif db_type == DatabaseType.REDIS:
+            redis_m = re.match(
+                r"\d+:\w+\s+(\d+\s+\w+\s+\d{4}\s+\d{2}:\d{2}:\d{2}\.\d+)\s*([#*.\-])\s*(.*)", rest
+            )
+            if redis_m:
+                timestamp = redis_m.group(1)
+                marker = redis_m.group(2)
+                message = redis_m.group(3)
+                level = {"#": "warning", "*": "info", ".": "debug", "-": "info"}.get(marker, "info")
+
+        if not message or message.isspace():
+            return None
+        return {"timestamp": timestamp, "level": level, "message": message.strip()}
+
+    @staticmethod
+    async def get_database_metrics(
+        name_or_id: str, db_type: DatabaseType,
+        database: str, username: str, password: str
+    ) -> dict:
+        """Get database-specific performance metrics (connections, cache, transactions)."""
+        metrics: dict = {
+            "connections": 0,
+            "active_queries": 0,
+            "queries_per_sec": None,
+            "cache_hit_ratio": None,
+            "uptime_seconds": None,
+            "total_transactions": None,
+            "slow_queries": None,
+        }
+
+        try:
+            if db_type == DatabaseType.POSTGRESQL:
+                sql = (
+                    "SELECT json_build_object("
+                    "'connections', (SELECT count(*) FROM pg_stat_activity),"
+                    "'active_queries', (SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND pid != pg_backend_pid()),"
+                    "'cache_hit_ratio', (SELECT CASE WHEN sum(blks_hit)+sum(blks_read)>0 "
+                    "THEN round(sum(blks_hit)::numeric/(sum(blks_hit)+sum(blks_read))*100,2) ELSE 0 END FROM pg_stat_database),"
+                    "'total_transactions', (SELECT sum(xact_commit+xact_rollback) FROM pg_stat_database),"
+                    "'uptime_seconds', (SELECT extract(epoch from now()-pg_postmaster_start_time())::integer)"
+                    ");"
+                )
+                ok, out = await ContainerService.exec_command(
+                    name_or_id, ["psql", "-U", username, "-d", database, "-t", "-A", "-c", sql]
+                )
+                if ok and out.strip():
+                    data = json.loads(out.strip().split("\n")[0])
+                    metrics.update({k: v for k, v in data.items() if v is not None})
+
+            elif db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB):
+                sql = (
+                    "SELECT JSON_OBJECT("
+                    "'connections', @@global.max_connections - "
+                    "(SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='Threads_connected'),"
+                    "'active_queries', (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='Threads_running'),"
+                    "'total_transactions', (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='Questions'),"
+                    "'uptime_seconds', (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='Uptime'),"
+                    "'slow_queries', (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='Slow_queries')"
+                    ");"
+                )
+                # connections = Threads_connected actually
+                sql2 = (
+                    "SELECT JSON_OBJECT("
+                    "'connections', (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='Threads_connected'),"
+                    "'active_queries', (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='Threads_running'),"
+                    "'total_transactions', (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='Questions'),"
+                    "'uptime_seconds', (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='Uptime'),"
+                    "'slow_queries', (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='Slow_queries')"
+                    ");"
+                )
+                ok, out = await ContainerService.exec_command(
+                    name_or_id, ["mysql", "-u", username, f"-p{password}", "-N", "-e", sql2]
+                )
+                if ok and out.strip():
+                    for ln in out.strip().split("\n"):
+                        try:
+                            data = json.loads(ln.strip())
+                            metrics["connections"] = int(data.get("connections", 0))
+                            metrics["active_queries"] = int(data.get("active_queries", 0))
+                            metrics["total_transactions"] = int(data.get("total_transactions", 0))
+                            metrics["uptime_seconds"] = int(data.get("uptime_seconds", 0))
+                            metrics["slow_queries"] = int(data.get("slow_queries", 0))
+                            break
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+
+                # Cache hit ratio separately (avoids division by zero in JSON_OBJECT)
+                sql_cache = (
+                    "SELECT ROUND("
+                    "(SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='Innodb_buffer_pool_read_requests') / "
+                    "GREATEST(1, (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='Innodb_buffer_pool_read_requests') + "
+                    "(SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='Innodb_buffer_pool_reads')) * 100, 2"
+                    ") AS ratio;"
+                )
+                ok2, out2 = await ContainerService.exec_command(
+                    name_or_id, ["mysql", "-u", username, f"-p{password}", "-N", "-e", sql_cache]
+                )
+                if ok2 and out2.strip():
+                    try:
+                        metrics["cache_hit_ratio"] = float(out2.strip().split("\n")[0])
+                    except ValueError:
+                        pass
+
+            elif db_type == DatabaseType.MONGODB:
+                script = (
+                    'const s=db.serverStatus();'
+                    'printjson({connections:s.connections.current,'
+                    'active_queries:s.connections.active||0,'
+                    'total_transactions:(s.opcounters.query||0)+(s.opcounters.insert||0)+(s.opcounters.update||0)+(s.opcounters.delete||0),'
+                    'uptime_seconds:s.uptime});'
+                )
+                ok, out = await ContainerService.exec_command(
+                    name_or_id, ["mongosh", "--quiet", "--eval", script]
+                )
+                if ok and out.strip():
+                    for ln in out.strip().split("\n"):
+                        try:
+                            data = json.loads(ln.strip())
+                            metrics.update({k: v for k, v in data.items() if v is not None})
+                            break
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+
+            elif db_type == DatabaseType.REDIS:
+                ok, out = await ContainerService.exec_command(
+                    name_or_id, ["redis-cli", "-a", password, "--no-auth-warning", "INFO"]
+                )
+                if ok and out:
+                    info = {}
+                    for ln in out.split("\n"):
+                        if ":" in ln and not ln.startswith("#"):
+                            k, v = ln.strip().split(":", 1)
+                            info[k] = v
+                    metrics["connections"] = int(info.get("connected_clients", 0))
+                    metrics["uptime_seconds"] = int(info.get("uptime_in_seconds", 0))
+                    metrics["total_transactions"] = int(info.get("total_commands_processed", 0))
+                    hits = int(info.get("keyspace_hits", 0))
+                    misses = int(info.get("keyspace_misses", 0))
+                    if hits + misses > 0:
+                        metrics["cache_hit_ratio"] = round(hits / (hits + misses) * 100, 2)
+        except Exception as e:
+            metrics["error"] = str(e)
+        return metrics
+
     @staticmethod
     async def get_container_stats(name_or_id: str) -> dict:
         """Get container resource usage stats (CPU, memory, network, disk)"""
