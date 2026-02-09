@@ -17,7 +17,6 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -164,6 +163,13 @@ const DATABASE_TYPES: Record<string, { label: string; icon: string; description:
   redis: { label: 'Redis', icon: '🔴', description: 'In-memory data structure store' },
 };
 
+const chartColors = {
+  cpu: 'hsl(var(--chart-1, 217 91% 60%))',
+  memory: 'hsl(var(--chart-2, 142 71% 45%))',
+  connections: 'hsl(var(--chart-3, 33 93% 54%))',
+  cache: 'hsl(var(--chart-4, 271 91% 65%))',
+};
+
 // API functions
 const detailApi = {
   getDatabase: (id: number) => 
@@ -192,6 +198,8 @@ const detailApi = {
     api.delete(`/modules/databases/databases/${id}`).then(r => r.data),
   restartDatabase: (id: number) => 
     api.post(`/modules/databases/databases/${id}/restart`).then(r => r.data),
+  exportDatabase: (id: number) =>
+    api.get(`/modules/databases/databases/${id}/export`, { responseType: 'blob' }),
   getTables: (id: number) => 
     api.get<{ tables: string[] }>(`/modules/databases/databases/${id}/tables`).then(r => r.data),
   getTableSchema: (id: number, tableName: string) => 
@@ -296,6 +304,11 @@ function DatabaseDetailPageContent() {
     const cutoff = (Date.now() / 1000) - (rangeSeconds[metricsRange] || 3600);
     return metricsData.history.filter((p: MetricsPoint) => p.timestamp >= cutoff);
   }, [metricsData?.history, metricsRange]);
+
+  const hasCacheHitData = useMemo(
+    () => filteredHistory.some((p) => p.cache_hit_ratio != null),
+    [filteredHistory]
+  );
 
   // Auto-scroll logs to bottom when updated
   useEffect(() => {
@@ -412,6 +425,34 @@ function DatabaseDetailPageContent() {
     },
   });
 
+  const exportMutation = useMutation({
+    mutationFn: () => detailApi.exportDatabase(databaseId),
+    onSuccess: (response) => {
+      const blob = response.data as Blob;
+      const disposition = response.headers?.['content-disposition'] as string | undefined;
+      const match = disposition?.match(/filename="?([^";]+)"?/i);
+      const fallbackName = `${database.name || 'database'}-export.sql`;
+      const fileName = match?.[1] || fallbackName;
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success('Export complete');
+    },
+    onError: (err: any) => {
+      const status = err?.response?.status;
+      if (status === 401 || status === 403) {
+        toast.error('Export failed: authentication required. Please sign in again.');
+        return;
+      }
+      toast.error(err?.response?.data?.detail || 'Failed to export database');
+    },
+  });
+
   const snapshotMutation = useMutation({
     mutationFn: () => detailApi.createSnapshot(databaseId),
     onSuccess: () => {
@@ -495,6 +536,11 @@ function DatabaseDetailPageContent() {
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
+          {typeInfo?.icon && (
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-xl">
+              {typeInfo.icon}
+            </div>
+          )}
           <div>
             <h1 className="text-2xl font-bold">{database.name}</h1>
             <p className="text-muted-foreground text-sm">{typeInfo?.description}</p>
@@ -512,34 +558,34 @@ function DatabaseDetailPageContent() {
           </span>
           {(database.status === 'running' || database.status === 'restarting' || database.status === 'stopping') ? (
             <>
-              <Button variant="outline" size="sm" className="inline-flex items-center" onClick={() => restartMutation.mutate()} disabled={restartMutation.isPending || database.status === 'restarting' || database.status === 'stopping'}>
+              <Button variant="outline" size="sm" className="inline-flex items-center justify-center gap-2" onClick={() => restartMutation.mutate()} disabled={restartMutation.isPending || database.status === 'restarting' || database.status === 'stopping'}>
                 <RefreshCw className="h-4 w-4 shrink-0" />
-                <span className="ml-2">Restart</span>
+                <span className="leading-none">Restart</span>
               </Button>
-              <Button variant="outline" size="sm" className="inline-flex items-center" onClick={() => stopMutation.mutate()} disabled={stopMutation.isPending || database.status === 'restarting' || database.status === 'stopping'}>
+              <Button variant="outline" size="sm" className="inline-flex items-center justify-center gap-2" onClick={() => stopMutation.mutate()} disabled={stopMutation.isPending || database.status === 'restarting' || database.status === 'stopping'}>
                 <Square className="h-4 w-4 shrink-0" />
-                <span className="ml-2">Stop</span>
+                <span className="leading-none">Stop</span>
               </Button>
             </>
           ) : database.status === 'stopped' && (
-            <Button variant="outline" size="sm" className="inline-flex items-center" onClick={() => startMutation.mutate()} disabled={startMutation.isPending || database.status === 'starting'}>
+            <Button variant="outline" size="sm" className="inline-flex items-center justify-center gap-2" onClick={() => startMutation.mutate()} disabled={startMutation.isPending || database.status === 'starting'}>
               <Play className="h-4 w-4 shrink-0" />
-              <span className="ml-2">Start</span>
+              <span className="leading-none">Start</span>
             </Button>
           )}
           <Button 
             variant="outline" 
             size="sm" 
-            className="inline-flex items-center"
-            onClick={() => window.open(`/api/modules/databases/databases/${databaseId}/export`, '_blank')}
-            disabled={database.status !== 'running'}
+            className="inline-flex items-center justify-center gap-2"
+            onClick={() => exportMutation.mutate()}
+            disabled={database.status !== 'running' || exportMutation.isPending}
           >
             <Download className="h-4 w-4 shrink-0" />
-            <span className="ml-2">Export</span>
+            <span className="leading-none">{exportMutation.isPending ? 'Exporting...' : 'Export'}</span>
           </Button>
-          <Button variant="destructive" size="sm" className="inline-flex items-center" onClick={() => setDeleteDialogOpen(true)}>
+          <Button variant="destructive" size="sm" className="inline-flex items-center justify-center gap-2" onClick={() => setDeleteDialogOpen(true)}>
             <Trash2 className="h-4 w-4 shrink-0" />
-            <span className="ml-2">Delete</span>
+            <span className="leading-none">Delete</span>
           </Button>
         </div>
       </div>
@@ -585,6 +631,7 @@ function DatabaseDetailPageContent() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Connection Details</CardTitle>
+                <CardDescription>Host and access credentials</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
@@ -679,6 +726,7 @@ function DatabaseDetailPageContent() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Database Info</CardTitle>
+                <CardDescription>Identity and lifecycle details</CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -807,6 +855,7 @@ function DatabaseDetailPageContent() {
                   <CardTitle className="text-lg flex items-center justify-between">
                     Performance
                   </CardTitle>
+                  <CardDescription>Live runtime highlights</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -887,7 +936,7 @@ function DatabaseDetailPageContent() {
             </CardHeader>
             <CardContent>
               <div className="overflow-hidden min-w-0 rounded-md border bg-muted">
-                <ScrollArea className="max-h-[70vh] w-full">
+                <div className="max-h-[70vh] w-full overflow-y-auto">
                   <div className="p-4">
                     <pre className="text-xs text-foreground font-mono whitespace-pre-wrap break-all leading-relaxed">
                       {filteredLogs.length > 0
@@ -898,7 +947,7 @@ function DatabaseDetailPageContent() {
                     </pre>
                     <div ref={logsEndRef} />
                   </div>
-                </ScrollArea>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -962,6 +1011,9 @@ function DatabaseDetailPageContent() {
                     <CardContent className="pt-4 pb-3 px-4">
                       <p className="text-xs text-muted-foreground mb-1">Cache Hit Ratio</p>
                       <p className="text-2xl font-bold">{metricsData.current.cache_hit_ratio != null ? `${metricsData.current.cache_hit_ratio}%` : '—'}</p>
+                      {metricsData.current.cache_hit_ratio == null && (
+                        <p className="text-xs text-muted-foreground">Waiting for connections</p>
+                      )}
                     </CardContent>
                   </Card>
                 </div>
@@ -982,9 +1034,9 @@ function DatabaseDetailPageContent() {
                             <Tooltip
                               labelFormatter={(v) => new Date(v * 1000).toLocaleTimeString()}
                               formatter={(v: number) => [`${v.toFixed(2)}%`, 'CPU']}
-                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--popover))' }}
+                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--popover))', color: 'hsl(var(--foreground))' }}
                             />
-                            <Line type="monotone" dataKey="cpu_percent" stroke="hsl(var(--chart-1))" strokeWidth={1.5} dot={false} />
+                            <Line type="monotone" dataKey="cpu_percent" stroke={chartColors.cpu} strokeWidth={1.75} dot={false} />
                           </LineChart>
                         </ResponsiveContainer>
                       </div>
@@ -1003,9 +1055,9 @@ function DatabaseDetailPageContent() {
                             <Tooltip
                               labelFormatter={(v) => new Date(v * 1000).toLocaleTimeString()}
                               formatter={(v: number) => [`${v.toFixed(1)} MB`, 'Memory']}
-                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--popover))' }}
+                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--popover))', color: 'hsl(var(--foreground))' }}
                             />
-                            <Line type="monotone" dataKey="memory_used_mb" stroke="hsl(var(--chart-2))" strokeWidth={1.5} dot={false} />
+                            <Line type="monotone" dataKey="memory_used_mb" stroke={chartColors.memory} strokeWidth={1.75} dot={false} />
                           </LineChart>
                         </ResponsiveContainer>
                       </div>
@@ -1024,9 +1076,9 @@ function DatabaseDetailPageContent() {
                             <Tooltip
                               labelFormatter={(v) => new Date(v * 1000).toLocaleTimeString()}
                               formatter={(v: number) => [v, 'Connections']}
-                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--popover))' }}
+                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--popover))', color: 'hsl(var(--foreground))' }}
                             />
-                            <Line type="monotone" dataKey="connections" stroke="hsl(var(--chart-3))" strokeWidth={1.5} dot={false} />
+                            <Line type="monotone" dataKey="connections" stroke={chartColors.connections} strokeWidth={1.75} dot={false} />
                           </LineChart>
                         </ResponsiveContainer>
                       </div>
@@ -1040,16 +1092,22 @@ function DatabaseDetailPageContent() {
                     </CardHeader>
                     <CardContent>
                       <div className="h-[200px]">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <LineChart data={filteredHistory}>
-                            <Tooltip
-                              labelFormatter={(v) => new Date(v * 1000).toLocaleTimeString()}
-                              formatter={(v: number | null) => [v != null ? `${v}%` : '—', 'Cache Hit']}
-                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--popover))' }}
-                            />
-                            <Line type="monotone" dataKey="cache_hit_ratio" stroke="hsl(var(--chart-4))" strokeWidth={1.5} dot={false} connectNulls />
-                          </LineChart>
-                        </ResponsiveContainer>
+                        {hasCacheHitData ? (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={filteredHistory}>
+                              <Tooltip
+                                labelFormatter={(v) => new Date(v * 1000).toLocaleTimeString()}
+                                formatter={(v: number | null) => [v != null ? `${v}%` : '—', 'Cache Hit']}
+                                contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--popover))', color: 'hsl(var(--foreground))' }}
+                              />
+                              <Line type="monotone" dataKey="cache_hit_ratio" stroke={chartColors.cache} strokeWidth={1.75} dot={false} connectNulls />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                            No cache data yet - waiting for connections
+                          </div>
+                        )}
                       </div>
                     </CardContent>
                   </Card>
@@ -1077,12 +1135,7 @@ function DatabaseDetailPageContent() {
                   onClick={() => snapshotMutation.mutate()} 
                   disabled={snapshotMutation.isPending || !isRunning}
                 >
-                  {snapshotMutation.isPending ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Download className="mr-2 h-4 w-4" />
-                  )}
-                  Create Snapshot
+                  {snapshotMutation.isPending ? 'Creating...' : 'Create Snapshot'}
                 </Button>
               </CardTitle>
               <CardDescription>
