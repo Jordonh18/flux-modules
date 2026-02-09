@@ -18,6 +18,7 @@ from module_sdk import (
     List,
     Dict,
     Any,
+    FileResponse,
     # VNet hooks
     allocate_vnet_ip,
     release_vnet_ip,
@@ -720,7 +721,7 @@ async def get_database_logs(database_id: int, tail: int = 100, db: AsyncSession 
         
         # Get logs
         orchestrator = ContainerOrchestrator()
-        logs = await orchestrator.get_logs(container_name, tail=tail)
+        logs = await orchestrator.get_container_logs(container_name, lines=tail)
         
         return {"logs": logs}
         
@@ -736,7 +737,7 @@ async def get_database_metrics(database_id: int, hours: int = 24, db: AsyncSessi
     """Get database metrics history."""
     try:
         collector = MetricsCollector()
-        metrics = await collector.get_metrics_history(database_id, hours=hours, db=db)
+        metrics = await collector.get_metrics_history(db, database_id, hours=hours)
         
         return metrics
         
@@ -842,32 +843,28 @@ async def inspect_database(database_id: int, db: AsyncSession = Depends(get_db))
 async def create_snapshot(database_id: int, db: AsyncSession = Depends(get_db)):
     """Create a backup/snapshot of the database."""
     try:
-        # Get instance
+        # Verify instance exists
         result = await db.execute(text(f'''
-            SELECT container_name, database_type
-            FROM "{INSTANCES_TABLE}"
-            WHERE id = :id
+            SELECT id FROM "{INSTANCES_TABLE}" WHERE id = :id
         '''), {"id": database_id})
-        row = result.fetchone()
-        
-        if not row:
+        if not result.fetchone():
             raise HTTPException(status_code=404, detail="Database instance not found")
         
-        container_name = row[0]
-        database_type = row[1]
-        
-        # Create backup
+        # Create backup using service
         backup_svc = BackupService()
-        backup_id = await backup_svc.create_backup(
+        backup_result = await backup_svc.create_backup(
+            db=db,
             instance_id=database_id,
-            container_name=container_name,
-            engine=database_type,
-            db=db
+            backup_type="manual",
+            notes=None
         )
         
+        if not backup_result.get("success"):
+            raise HTTPException(status_code=500, detail=backup_result.get("message", "Backup creation failed"))
+        
         return {
-            "snapshot_id": backup_id,
-            "message": "Snapshot created successfully"
+            "snapshot_id": backup_result["backup_id"],
+            "message": backup_result["message"]
         }
         
     except HTTPException:
@@ -944,8 +941,45 @@ async def delete_snapshot(database_id: int, snapshot_id: int, db: AsyncSession =
 @router.get("/databases/{database_id}/export", dependencies=[Depends(require_permission("databases:read"))])
 async def export_database(database_id: int, db: AsyncSession = Depends(get_db)):
     """Export database as a downloadable archive."""
-    # This is a placeholder - implementation would depend on specific requirements
-    raise HTTPException(status_code=501, detail="Export functionality not yet implemented")
+    try:
+        # Get instance name for filename
+        result = await db.execute(text(f'''
+            SELECT name FROM "{INSTANCES_TABLE}" WHERE id = :id
+        '''), {"id": database_id})
+        instance = result.fetchone()
+        if not instance:
+            raise HTTPException(status_code=404, detail="Database instance not found")
+        
+        instance_name = instance[0]
+        
+        # Create a temporary backup for export
+        backup_svc = BackupService()
+        backup_result = await backup_svc.create_backup(
+            db=db,
+            instance_id=database_id,
+            backup_type="export",
+            notes="Export download"
+        )
+        
+        if not backup_result.get("success"):
+            raise HTTPException(status_code=500, detail=backup_result.get("message", "Export failed"))
+        
+        backup_path = backup_result["path"]
+        
+        # Return file as download
+        import os
+        filename = os.path.basename(backup_path)
+        return FileResponse(
+            path=backup_path,
+            filename=f"{instance_name}_{filename}",
+            media_type="application/octet-stream"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error exporting database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/databases/{database_id}/tables", dependencies=[Depends(require_permission("databases:read"))])

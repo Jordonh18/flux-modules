@@ -10,7 +10,7 @@
       "name": "databases",
       "path": "modules/databases",
       "display_name": "Database Management",
-      "version": "2.0.4",
+      "version": "2.0.6",
       "description": "Database-as-a-Service management platform for Flux with 25+ database engine support",
       "author": "Flux Team",
       "min_app_version": "1.0.0",
