@@ -754,7 +754,7 @@ import time as _time
 from collections import deque
 
 _metrics_history: dict[int, deque] = {}
-_METRICS_MAX_POINTS = 120
+_METRICS_MAX_POINTS = 2592000  # ~30 days at 1s intervals
 
 
 @router.get("/databases/{database_id}/logs")
@@ -965,7 +965,7 @@ async def snapshot_database(
     snapshot_path = os.path.join(snapshot_dir, snapshot_filename)
     
     db_type = DatabaseType(row.database_type)
-    success, message = await ContainerService.snapshot_database(
+    success, message = await ContainerService.backup_database(
         row.container_name, db_type, row.database_name, row.username, row.password, snapshot_path
     )
     

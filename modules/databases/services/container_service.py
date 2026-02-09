@@ -786,6 +786,14 @@ class ContainerService:
                 entry = ContainerService._parse_log_line(line, db_type)
                 if entry:
                     entries.append(entry)
+
+            # If parsing produced nothing but we had raw lines, return them as-is
+            if not entries and raw:
+                for line in raw.split("\n"):
+                    line = line.strip()
+                    if line:
+                        entries.append({"timestamp": "", "level": "info", "message": line})
+
             return entries[-lines:]
         except Exception as e:
             return [{"timestamp": "", "level": "error", "message": f"Error reading logs: {str(e)}"}]
@@ -827,13 +835,15 @@ class ContainerService:
 
         elif db_type in (DatabaseType.MYSQL, DatabaseType.MARIADB):
             mysql = re.match(
-                r"(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[\.\d]*Z?\s*)?\d*\s*"
-                r"\[(System|Warning|Error|Note)\]\s*(?:\[[\w-]+\]\s*)*(?:\[[\w.]+\]\s*)*(.*)",
-                rest, re.IGNORECASE
+                r"(?:\d{4}-\d{2}-\d{2}T?\s*\d{2}:\d{2}:\d{2}[\.\d]*Z?\s*)?\d*\s*"
+                r"\[(System|Warning|Error|Note)\]\s*(.*)",
+                rest, re.IGNORECASE | re.DOTALL
             )
             if mysql:
                 sev = (mysql.group(1) or "").lower()
-                message = mysql.group(2)
+                msg = mysql.group(2).strip()
+                if msg:
+                    message = msg
                 level = {"system": "info", "warning": "warning", "error": "error", "note": "info"}.get(sev, "info")
 
         elif db_type == DatabaseType.MONGODB:

@@ -19,7 +19,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
-import { Input } from '@/components/ui/input';
+
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   AlertCircle,
@@ -32,21 +32,13 @@ import {
   Play,
   RefreshCw,
   ScrollText,
-  Table,
   Square,
   Trash2,
-  Eye,
-  EyeOff,
   Upload,
   Clock,
-  Search,
-  Columns,
-  List,
   Cpu,
   MemoryStick,
-  Network,
   Activity,
-  Filter,
   BarChart3,
 } from 'lucide-react';
 import { useDocumentTitle } from '@/hooks/use-document-title';
@@ -62,13 +54,10 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import {
-  Area,
-  AreaChart,
-  CartesianGrid,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
-  XAxis,
-  YAxis,
 } from 'recharts';
 
 // Types
@@ -256,6 +245,7 @@ function DatabaseDetailPageContent() {
   const [restoreDialogSnapshot, setRestoreDialogSnapshot] = useState<Snapshot | null>(null);
   const [logLevelFilter, setLogLevelFilter] = useState('all');
   const [logSearch, setLogSearch] = useState('');
+  const [metricsRange, setMetricsRange] = useState('1h');
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   // Queries
@@ -294,8 +284,18 @@ function DatabaseDetailPageContent() {
     queryKey: ['databases', 'metrics', databaseId],
     queryFn: () => detailApi.getMetrics(databaseId),
     enabled: databaseId > 0 && database?.status === 'running' && (activeTab === 'metrics' || activeTab === 'overview'),
-    refetchInterval: (activeTab === 'metrics' || activeTab === 'overview') ? 5000 : false,
+    refetchInterval: (activeTab === 'metrics' || activeTab === 'overview') ? 1000 : false,
   });
+
+  // Filter metrics history by selected time range
+  const filteredHistory = useMemo(() => {
+    if (!metricsData?.history) return [];
+    const rangeSeconds: Record<string, number> = {
+      '1h': 3600, '6h': 21600, '12h': 43200, '1d': 86400, '7d': 604800, '30d': 2592000,
+    };
+    const cutoff = (Date.now() / 1000) - (rangeSeconds[metricsRange] || 3600);
+    return metricsData.history.filter((p: MetricsPoint) => p.timestamp >= cutoff);
+  }, [metricsData?.history, metricsRange]);
 
   // Auto-scroll logs to bottom when updated
   useEffect(() => {
@@ -416,9 +416,9 @@ function DatabaseDetailPageContent() {
     mutationFn: () => detailApi.createSnapshot(databaseId),
     onSuccess: () => {
       refetchSnapshots();
-      toast.success('Backup created successfully');
+      toast.success('Snapshot created successfully');
     },
-    onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to create backup'),
+    onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to create snapshot'),
   });
 
   const restoreMutation = useMutation({
@@ -427,16 +427,16 @@ function DatabaseDetailPageContent() {
       setRestoreDialogSnapshot(null);
       toast.success('Database restored successfully');
     },
-    onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to restore backup'),
+    onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to restore snapshot'),
   });
 
   const deleteSnapshotMutation = useMutation({
     mutationFn: (snapshotId: number) => detailApi.deleteSnapshot(databaseId, snapshotId),
     onSuccess: () => {
       refetchSnapshots();
-      toast.success('Backup deleted');
+      toast.success('Snapshot deleted');
     },
-    onError: () => toast.error('Failed to delete backup'),
+    onError: () => toast.error('Failed to delete snapshot'),
   });
 
   const getStatusBadgeClass = (status: string) => {
@@ -495,12 +495,9 @@ function DatabaseDetailPageContent() {
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-3">
-            <span className="text-3xl">{typeInfo?.icon}</span>
-            <div>
-              <h1 className="text-2xl font-bold">{database.name}</h1>
-              <p className="text-muted-foreground text-sm">{typeInfo?.description}</p>
-            </div>
+          <div>
+            <h1 className="text-2xl font-bold">{database.name}</h1>
+            <p className="text-muted-foreground text-sm">{typeInfo?.description}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -515,33 +512,34 @@ function DatabaseDetailPageContent() {
           </span>
           {(database.status === 'running' || database.status === 'restarting' || database.status === 'stopping') ? (
             <>
-              <Button variant="outline" size="sm" onClick={() => restartMutation.mutate()} disabled={restartMutation.isPending || database.status === 'restarting' || database.status === 'stopping'}>
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Restart
+              <Button variant="outline" size="sm" className="inline-flex items-center" onClick={() => restartMutation.mutate()} disabled={restartMutation.isPending || database.status === 'restarting' || database.status === 'stopping'}>
+                <RefreshCw className="h-4 w-4 shrink-0" />
+                <span className="ml-2">Restart</span>
               </Button>
-              <Button variant="outline" size="sm" onClick={() => stopMutation.mutate()} disabled={stopMutation.isPending || database.status === 'restarting' || database.status === 'stopping'}>
-                <Square className="mr-2 h-4 w-4" />
-                Stop
+              <Button variant="outline" size="sm" className="inline-flex items-center" onClick={() => stopMutation.mutate()} disabled={stopMutation.isPending || database.status === 'restarting' || database.status === 'stopping'}>
+                <Square className="h-4 w-4 shrink-0" />
+                <span className="ml-2">Stop</span>
               </Button>
             </>
           ) : database.status === 'stopped' && (
-            <Button variant="outline" size="sm" onClick={() => startMutation.mutate()} disabled={startMutation.isPending || database.status === 'starting'}>
-              <Play className="mr-2 h-4 w-4" />
-              Start
+            <Button variant="outline" size="sm" className="inline-flex items-center" onClick={() => startMutation.mutate()} disabled={startMutation.isPending || database.status === 'starting'}>
+              <Play className="h-4 w-4 shrink-0" />
+              <span className="ml-2">Start</span>
             </Button>
           )}
           <Button 
             variant="outline" 
             size="sm" 
+            className="inline-flex items-center"
             onClick={() => window.open(`/api/modules/databases/databases/${databaseId}/export`, '_blank')}
             disabled={database.status !== 'running'}
           >
-            <Download className="mr-2 h-4 w-4" />
-            Export
+            <Download className="h-4 w-4 shrink-0" />
+            <span className="ml-2">Export</span>
           </Button>
-          <Button variant="destructive" size="sm" onClick={() => setDeleteDialogOpen(true)}>
-            <Trash2 className="mr-2 h-4 w-4" />
-            Delete
+          <Button variant="destructive" size="sm" className="inline-flex items-center" onClick={() => setDeleteDialogOpen(true)}>
+            <Trash2 className="h-4 w-4 shrink-0" />
+            <span className="ml-2">Delete</span>
           </Button>
         </div>
       </div>
@@ -685,10 +683,7 @@ function DatabaseDetailPageContent() {
               <CardContent className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground">Type</span>
-                  <span className="flex items-center gap-2">
-                    <span>{typeInfo?.icon}</span>
-                    <span>{typeInfo?.label}</span>
-                  </span>
+                  <span>{typeInfo?.label}</span>
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between">
@@ -869,68 +864,38 @@ function DatabaseDetailPageContent() {
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="text-lg">Database Logs</CardTitle>
-                  <CardDescription>Structured server-side logs, auto-refreshes every 3 seconds</CardDescription>
+                  <CardDescription>Server logs, auto-refreshes every 3 seconds</CardDescription>
                 </div>
-                <Button variant="outline" size="sm" onClick={() => refetchLogs()} disabled={logsLoading}>
-                  {logsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                  <span className="ml-2">Refresh</span>
-                </Button>
-              </div>
-              <div className="flex gap-2 pt-2">
-                <div className="relative flex-1">
-                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search logs..."
-                    value={logSearch}
-                    onChange={(e) => setLogSearch(e.target.value)}
-                    className="pl-8 h-9"
-                  />
+                <div className="flex items-center gap-2">
+                  <Select value={logLevelFilter} onValueChange={setLogLevelFilter}>
+                    <SelectTrigger className="w-[120px] h-8 text-xs">
+                      <SelectValue placeholder="All levels" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All levels</SelectItem>
+                      <SelectItem value="error">Error</SelectItem>
+                      <SelectItem value="warning">Warning</SelectItem>
+                      <SelectItem value="info">Info</SelectItem>
+                      <SelectItem value="debug">Debug</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button variant="outline" size="sm" onClick={() => refetchLogs()} disabled={logsLoading}>
+                    {logsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                  </Button>
                 </div>
-                <Select value={logLevelFilter} onValueChange={setLogLevelFilter}>
-                  <SelectTrigger className="w-[130px] h-9">
-                    <Filter className="h-3.5 w-3.5 mr-2" />
-                    <SelectValue placeholder="All levels" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All levels</SelectItem>
-                    <SelectItem value="error">Error</SelectItem>
-                    <SelectItem value="warning">Warning</SelectItem>
-                    <SelectItem value="info">Info</SelectItem>
-                    <SelectItem value="debug">Debug</SelectItem>
-                  </SelectContent>
-                </Select>
               </div>
             </CardHeader>
             <CardContent>
-              <div className="overflow-hidden min-w-0 rounded-md border">
+              <div className="overflow-hidden min-w-0 rounded-md border bg-muted">
                 <ScrollArea className="max-h-[70vh] w-full">
-                  <div className="divide-y">
-                    {filteredLogs.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                        <ScrollText className="h-10 w-10 mb-3 opacity-50" />
-                        <p className="text-sm">No log entries found</p>
-                      </div>
-                    ) : (
-                      filteredLogs.map((entry, i) => (
-                        <div key={i} className="flex items-start gap-3 px-3 py-1.5 hover:bg-muted/50 text-xs font-mono">
-                          <span className="text-muted-foreground whitespace-nowrap shrink-0 w-[155px]">
-                            {entry.timestamp ? formatLogTimestamp(entry.timestamp) : '—'}
-                          </span>
-                          <Badge
-                            variant={entry.level === 'error' ? 'destructive' : 'outline'}
-                            className={cn(
-                              'text-[10px] px-1.5 py-0 shrink-0 w-[58px] justify-center',
-                              entry.level === 'warning' && 'border-yellow-500/50 text-yellow-600 dark:text-yellow-400',
-                              entry.level === 'debug' && 'border-blue-500/50 text-blue-600 dark:text-blue-400',
-                              entry.level === 'info' && 'text-muted-foreground',
-                            )}
-                          >
-                            {entry.level}
-                          </Badge>
-                          <span className="text-foreground break-all">{entry.message}</span>
-                        </div>
-                      ))
-                    )}
+                  <div className="p-4">
+                    <pre className="text-xs text-foreground font-mono whitespace-pre-wrap break-all leading-relaxed">
+                      {filteredLogs.length > 0
+                        ? filteredLogs.map((e, i) => 
+                            `${e.timestamp ? e.timestamp : ''} [${e.level.toUpperCase()}] ${e.message}`
+                          ).join('\n')
+                        : 'No logs available'}
+                    </pre>
                     <div ref={logsEndRef} />
                   </div>
                 </ScrollArea>
@@ -950,6 +915,26 @@ function DatabaseDetailPageContent() {
             </Card>
           ) : (
             <>
+              {/* Time range selector */}
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  {filteredHistory.length} data points
+                </p>
+                <div className="flex items-center gap-1 rounded-lg border p-1">
+                  {['1h', '6h', '12h', '1d', '7d', '30d'].map((range) => (
+                    <Button
+                      key={range}
+                      variant={metricsRange === range ? 'default' : 'ghost'}
+                      size="sm"
+                      className="h-7 px-2.5 text-xs"
+                      onClick={() => setMetricsRange(range)}
+                    >
+                      {range}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
               {/* Summary cards */}
               {metricsData?.current && (
                 <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
@@ -983,7 +968,7 @@ function DatabaseDetailPageContent() {
               )}
 
               {/* Charts */}
-              {metricsData?.history && metricsData.history.length > 1 && (
+              {filteredHistory.length > 1 ? (
                 <div className="grid gap-4 md:grid-cols-2">
                   {/* CPU Chart */}
                   <Card>
@@ -993,28 +978,14 @@ function DatabaseDetailPageContent() {
                     <CardContent>
                       <div className="h-[200px]">
                         <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={metricsData.history}>
-                            <defs>
-                              <linearGradient id="cpuGrad" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="hsl(var(--chart-1))" stopOpacity={0.3} />
-                                <stop offset="95%" stopColor="hsl(var(--chart-1))" stopOpacity={0} />
-                              </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                            <XAxis
-                              dataKey="timestamp"
-                              tickFormatter={(v) => new Date(v * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                              tick={{ fontSize: 10 }}
-                              className="text-muted-foreground"
-                            />
-                            <YAxis domain={[0, 'auto']} tick={{ fontSize: 10 }} tickFormatter={(v) => `${v}%`} className="text-muted-foreground" />
+                          <LineChart data={filteredHistory}>
                             <Tooltip
                               labelFormatter={(v) => new Date(v * 1000).toLocaleTimeString()}
                               formatter={(v: number) => [`${v.toFixed(2)}%`, 'CPU']}
-                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))' }}
+                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--popover))' }}
                             />
-                            <Area type="monotone" dataKey="cpu_percent" stroke="hsl(var(--chart-1))" fill="url(#cpuGrad)" strokeWidth={2} dot={false} />
-                          </AreaChart>
+                            <Line type="monotone" dataKey="cpu_percent" stroke="hsl(var(--chart-1))" strokeWidth={1.5} dot={false} />
+                          </LineChart>
                         </ResponsiveContainer>
                       </div>
                     </CardContent>
@@ -1028,28 +999,14 @@ function DatabaseDetailPageContent() {
                     <CardContent>
                       <div className="h-[200px]">
                         <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={metricsData.history}>
-                            <defs>
-                              <linearGradient id="memGrad" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="hsl(var(--chart-2))" stopOpacity={0.3} />
-                                <stop offset="95%" stopColor="hsl(var(--chart-2))" stopOpacity={0} />
-                              </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                            <XAxis
-                              dataKey="timestamp"
-                              tickFormatter={(v) => new Date(v * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                              tick={{ fontSize: 10 }}
-                              className="text-muted-foreground"
-                            />
-                            <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `${v} MB`} className="text-muted-foreground" />
+                          <LineChart data={filteredHistory}>
                             <Tooltip
                               labelFormatter={(v) => new Date(v * 1000).toLocaleTimeString()}
                               formatter={(v: number) => [`${v.toFixed(1)} MB`, 'Memory']}
-                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))' }}
+                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--popover))' }}
                             />
-                            <Area type="monotone" dataKey="memory_used_mb" stroke="hsl(var(--chart-2))" fill="url(#memGrad)" strokeWidth={2} dot={false} />
-                          </AreaChart>
+                            <Line type="monotone" dataKey="memory_used_mb" stroke="hsl(var(--chart-2))" strokeWidth={1.5} dot={false} />
+                          </LineChart>
                         </ResponsiveContainer>
                       </div>
                     </CardContent>
@@ -1063,28 +1020,14 @@ function DatabaseDetailPageContent() {
                     <CardContent>
                       <div className="h-[200px]">
                         <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={metricsData.history}>
-                            <defs>
-                              <linearGradient id="connGrad" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="hsl(var(--chart-3))" stopOpacity={0.3} />
-                                <stop offset="95%" stopColor="hsl(var(--chart-3))" stopOpacity={0} />
-                              </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                            <XAxis
-                              dataKey="timestamp"
-                              tickFormatter={(v) => new Date(v * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                              tick={{ fontSize: 10 }}
-                              className="text-muted-foreground"
-                            />
-                            <YAxis allowDecimals={false} tick={{ fontSize: 10 }} className="text-muted-foreground" />
+                          <LineChart data={filteredHistory}>
                             <Tooltip
                               labelFormatter={(v) => new Date(v * 1000).toLocaleTimeString()}
                               formatter={(v: number) => [v, 'Connections']}
-                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))' }}
+                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--popover))' }}
                             />
-                            <Area type="monotone" dataKey="connections" stroke="hsl(var(--chart-3))" fill="url(#connGrad)" strokeWidth={2} dot={false} />
-                          </AreaChart>
+                            <Line type="monotone" dataKey="connections" stroke="hsl(var(--chart-3))" strokeWidth={1.5} dot={false} />
+                          </LineChart>
                         </ResponsiveContainer>
                       </div>
                     </CardContent>
@@ -1098,36 +1041,20 @@ function DatabaseDetailPageContent() {
                     <CardContent>
                       <div className="h-[200px]">
                         <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={metricsData.history}>
-                            <defs>
-                              <linearGradient id="cacheGrad" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="hsl(var(--chart-4))" stopOpacity={0.3} />
-                                <stop offset="95%" stopColor="hsl(var(--chart-4))" stopOpacity={0} />
-                              </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                            <XAxis
-                              dataKey="timestamp"
-                              tickFormatter={(v) => new Date(v * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                              tick={{ fontSize: 10 }}
-                              className="text-muted-foreground"
-                            />
-                            <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} tickFormatter={(v) => `${v}%`} className="text-muted-foreground" />
+                          <LineChart data={filteredHistory}>
                             <Tooltip
                               labelFormatter={(v) => new Date(v * 1000).toLocaleTimeString()}
                               formatter={(v: number | null) => [v != null ? `${v}%` : '—', 'Cache Hit']}
-                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))' }}
+                              contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--popover))' }}
                             />
-                            <Area type="monotone" dataKey="cache_hit_ratio" stroke="hsl(var(--chart-4))" fill="url(#cacheGrad)" strokeWidth={2} dot={false} connectNulls />
-                          </AreaChart>
+                            <Line type="monotone" dataKey="cache_hit_ratio" stroke="hsl(var(--chart-4))" strokeWidth={1.5} dot={false} connectNulls />
+                          </LineChart>
                         </ResponsiveContainer>
                       </div>
                     </CardContent>
                   </Card>
                 </div>
-              )}
-
-              {metricsData?.history && metricsData.history.length <= 1 && (
+              ) : (
                 <Card>
                   <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                     <Loader2 className="h-8 w-8 mb-3 animate-spin opacity-50" />
