@@ -8,7 +8,7 @@ Module ID: 620600
 Table Prefix: 620600_databases
 """
 
-__version__ = "2.0.6"
+__version__ = "2.0.7"
 
 # =============================================================================
 # Unified Module Identifier System

@@ -703,7 +703,7 @@ async def delete_database(database_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/databases/{database_id}/logs", dependencies=[Depends(require_permission("databases:read"))])
-async def get_database_logs(database_id: int, tail: int = 100, db: AsyncSession = Depends(get_db)):
+async def get_database_logs(database_id: int, lines: int = 200, level: str = "", db: AsyncSession = Depends(get_db)):
     """Get database container logs."""
     try:
         # Get instance
@@ -719,11 +719,41 @@ async def get_database_logs(database_id: int, tail: int = 100, db: AsyncSession 
         
         container_name = row[0]
         
-        # Get logs
-        orchestrator = ContainerOrchestrator()
-        logs = await orchestrator.get_container_logs(container_name, lines=tail)
+        # Get logs from container
+        raw_logs = await ContainerOrchestrator.get_container_logs(container_name, lines=lines)
         
-        return {"logs": logs}
+        # Parse raw log string into structured entries
+        entries = []
+        for line in raw_logs.strip().split('\n') if raw_logs.strip() else []:
+            if not line.strip():
+                continue
+            # Try to extract timestamp from beginning of line
+            parts = line.split(' ', 1)
+            timestamp = parts[0] if len(parts) > 1 else ""
+            message = parts[1] if len(parts) > 1 else line
+            
+            # Detect log level from message content
+            msg_lower = message.lower()
+            if 'error' in msg_lower or 'fatal' in msg_lower or 'panic' in msg_lower:
+                entry_level = 'error'
+            elif 'warn' in msg_lower:
+                entry_level = 'warning'
+            elif 'debug' in msg_lower or 'trace' in msg_lower:
+                entry_level = 'debug'
+            else:
+                entry_level = 'info'
+            
+            # Apply level filter if specified
+            if level and level != 'all' and entry_level != level:
+                continue
+            
+            entries.append({
+                "timestamp": timestamp,
+                "level": entry_level,
+                "message": message
+            })
+        
+        return {"entries": entries}
         
     except HTTPException:
         raise
@@ -736,10 +766,58 @@ async def get_database_logs(database_id: int, tail: int = 100, db: AsyncSession 
 async def get_database_metrics(database_id: int, hours: int = 24, db: AsyncSession = Depends(get_db)):
     """Get database metrics history."""
     try:
-        collector = MetricsCollector()
-        metrics = await collector.get_metrics_history(db, database_id, hours=hours)
+        history = await MetricsCollector.get_metrics_history(db, database_id, hours=hours)
         
-        return metrics
+        # Build response in format frontend expects: { current, history }
+        current = None
+        if history:
+            latest = history[-1]
+            current = {
+                "timestamp": latest.get("collected_at", ""),
+                "cpu_percent": latest.get("cpu_percent", 0),
+                "memory_used_mb": latest.get("memory_used_mb", 0),
+                "memory_limit_mb": latest.get("memory_limit_mb", 0),
+                "memory_percent": latest.get("memory_percent", 0),
+                "connections": latest.get("connections", 0),
+                "active_queries": latest.get("active_queries", 0),
+                "cache_hit_ratio": latest.get("cache_hit_ratio"),
+                "total_transactions": latest.get("queries_per_sec"),
+                "uptime_seconds": latest.get("uptime_seconds"),
+                "slow_queries": None
+            }
+        else:
+            current = {
+                "timestamp": None,
+                "cpu_percent": 0,
+                "memory_used_mb": 0,
+                "memory_limit_mb": 0,
+                "memory_percent": 0,
+                "connections": 0,
+                "active_queries": 0,
+                "cache_hit_ratio": None,
+                "total_transactions": None,
+                "uptime_seconds": None,
+                "slow_queries": None
+            }
+        
+        formatted_history = [
+            {
+                "timestamp": m.get("collected_at", ""),
+                "cpu_percent": m.get("cpu_percent", 0),
+                "memory_used_mb": m.get("memory_used_mb", 0),
+                "memory_limit_mb": m.get("memory_limit_mb", 0),
+                "memory_percent": m.get("memory_percent", 0),
+                "connections": m.get("connections", 0),
+                "active_queries": m.get("active_queries", 0),
+                "cache_hit_ratio": m.get("cache_hit_ratio"),
+                "total_transactions": m.get("queries_per_sec"),
+                "uptime_seconds": m.get("uptime_seconds"),
+                "slow_queries": None
+            }
+            for m in history
+        ]
+        
+        return {"current": current, "history": formatted_history}
         
     except Exception as e:
         logger.error(f"Error getting metrics: {e}")
@@ -763,35 +841,21 @@ async def get_database_stats(database_id: int, db: AsyncSession = Depends(get_db
         
         container_name = row[0]
         
-        # Get stats
-        orchestrator = ContainerOrchestrator()
-        stats_output = await orchestrator.get_stats(container_name)
-        
-        # Parse stats output
-        lines = stats_output.strip().split('\n')
-        if len(lines) < 2:
-            raise HTTPException(status_code=500, detail="Invalid stats output")
-        
-        # Parse the data line (skip header)
-        parts = lines[1].split()
-        if len(parts) < 8:
-            raise HTTPException(status_code=500, detail="Invalid stats format")
-        
-        # Extract memory usage
-        mem_usage = parts[2]
-        mem_parts = mem_usage.split('/')
-        mem_used_mb = _parse_mem_value(mem_parts[0].strip())
-        mem_limit_mb = _parse_mem_value(mem_parts[1].strip()) if len(mem_parts) > 1 else 0
-        
-        # Extract CPU percentage
-        cpu_percent = parts[1].strip('%')
+        # Get stats using correct static method
+        stats = await ContainerOrchestrator.get_container_stats(container_name)
+        parsed = MetricsCollector.parse_container_stats(stats)
         
         return {
             "container_name": container_name,
-            "cpu_percent": float(cpu_percent) if cpu_percent else 0.0,
-            "memory_used_mb": mem_used_mb,
-            "memory_limit_mb": mem_limit_mb,
-            "memory_percent": (mem_used_mb / mem_limit_mb * 100) if mem_limit_mb > 0 else 0.0
+            "cpu_percent": parsed.get("cpu_percent", 0.0),
+            "memory_used_mb": parsed.get("memory_used_mb", 0.0),
+            "memory_limit_mb": parsed.get("memory_limit_mb", 0.0),
+            "memory_percent": parsed.get("memory_percent", 0.0),
+            "mem_usage": f"{parsed.get('memory_used_mb', 0):.1f}MiB / {parsed.get('memory_limit_mb', 0):.1f}MiB",
+            "mem_percent": f"{parsed.get('memory_percent', 0):.1f}%",
+            "net_io": stats.get("NetInput", "0B") + " / " + stats.get("NetOutput", "0B"),
+            "block_io": stats.get("BlockInput", "0B") + " / " + stats.get("BlockOutput", "0B"),
+            "pids": stats.get("PIDs", 0)
         }
         
     except HTTPException:
@@ -807,7 +871,7 @@ async def inspect_database(database_id: int, db: AsyncSession = Depends(get_db))
     try:
         # Get instance
         result = await db.execute(text(f'''
-            SELECT container_name
+            SELECT container_name, database_type
             FROM "{INSTANCES_TABLE}"
             WHERE id = :id
         '''), {"id": database_id})
@@ -817,20 +881,38 @@ async def inspect_database(database_id: int, db: AsyncSession = Depends(get_db))
             raise HTTPException(status_code=404, detail="Database instance not found")
         
         container_name = row[0]
+        database_type = row[1]
         
-        # Inspect container
-        orchestrator = ContainerOrchestrator()
-        inspect_output = await orchestrator.inspect(container_name)
+        # Inspect container using correct static method (returns flattened dict)
+        inspect_data = await ContainerOrchestrator.get_container_inspect(container_name)
         
-        # Parse JSON output
-        try:
-            inspect_data = json.loads(inspect_output)
-            if isinstance(inspect_data, list) and len(inspect_data) > 0:
-                inspect_data = inspect_data[0]
-        except json.JSONDecodeError:
-            inspect_data = {"raw": inspect_output}
-        
-        return inspect_data
+        # Format response to match frontend InspectInfo interface
+        # The orchestrator returns a flattened dict with: id, name, status, running,
+        # created, started, finished, exit_code, image, ports, ip_address, networks
+        return {
+            "container": {
+                "id": inspect_data.get("id", ""),
+                "name": inspect_data.get("name", container_name),
+                "image": inspect_data.get("image", ""),
+                "created": inspect_data.get("created", ""),
+                "state": {
+                    "status": inspect_data.get("status", "unknown"),
+                    "running": inspect_data.get("running", False),
+                    "started_at": inspect_data.get("started", ""),
+                    "finished_at": inspect_data.get("finished", ""),
+                    "exit_code": inspect_data.get("exit_code", 0)
+                },
+                "network": {
+                    "ip_address": inspect_data.get("ip_address", ""),
+                    "ports": inspect_data.get("ports", {})
+                },
+                "mounts": []
+            },
+            "database_size": {
+                "size": "N/A",
+                "error": None
+            }
+        }
         
     except HTTPException:
         raise
@@ -878,10 +960,9 @@ async def create_snapshot(database_id: int, db: AsyncSession = Depends(get_db)):
 async def list_snapshots(database_id: int, db: AsyncSession = Depends(get_db)):
     """List all snapshots for a database instance."""
     try:
-        backup_svc = BackupService()
-        snapshots = await backup_svc.list_backups(instance_id=database_id, db=db)
+        snapshots = await BackupService.list_backups(db=db, instance_id=database_id)
         
-        return snapshots
+        return {"snapshots": snapshots if isinstance(snapshots, list) else []}
         
     except Exception as e:
         logger.error(f"Error listing snapshots: {e}")
@@ -907,15 +988,16 @@ async def restore_snapshot(database_id: int, snapshot_id: int, db: AsyncSession 
         database_type = row[1]
         
         # Restore backup
-        backup_svc = BackupService()
-        await backup_svc.restore_backup(
-            backup_id=snapshot_id,
-            container_name=container_name,
-            engine=database_type,
-            db=db
+        restore_result = await BackupService.restore_backup(
+            db=db,
+            instance_id=database_id,
+            backup_id=snapshot_id
         )
         
-        return {"message": "Snapshot restored successfully"}
+        if not restore_result.get("success"):
+            raise HTTPException(status_code=500, detail=restore_result.get("message", "Restore failed"))
+        
+        return {"message": restore_result.get("message", "Snapshot restored successfully")}
         
     except HTTPException:
         raise
@@ -928,10 +1010,12 @@ async def restore_snapshot(database_id: int, snapshot_id: int, db: AsyncSession 
 async def delete_snapshot(database_id: int, snapshot_id: int, db: AsyncSession = Depends(get_db)):
     """Delete a snapshot."""
     try:
-        backup_svc = BackupService()
-        await backup_svc.delete_backup(backup_id=snapshot_id, db=db)
+        delete_result = await BackupService.delete_backup(db=db, backup_id=snapshot_id)
         
-        return {"message": "Snapshot deleted successfully"}
+        if not delete_result.get("success"):
+            raise HTTPException(status_code=404, detail=delete_result.get("message", "Snapshot not found"))
+        
+        return {"message": delete_result.get("message", "Snapshot deleted successfully")}
         
     except Exception as e:
         logger.error(f"Error deleting snapshot: {e}")
@@ -944,7 +1028,7 @@ async def export_database(database_id: int, db: AsyncSession = Depends(get_db)):
     try:
         # Get instance name for filename
         result = await db.execute(text(f'''
-            SELECT name FROM "{INSTANCES_TABLE}" WHERE id = :id
+            SELECT container_name FROM "{INSTANCES_TABLE}" WHERE id = :id
         '''), {"id": database_id})
         instance = result.fetchone()
         if not instance:
@@ -1050,13 +1134,10 @@ async def get_database_health(database_id: int, db: AsyncSession = Depends(get_d
         container_name = row[0]
         database_type = row[1]
         
-        # Check health
-        health_monitor = HealthMonitor()
-        health_status = await health_monitor.check_health(
-            instance_id=database_id,
-            container_name=container_name,
-            engine=database_type,
-            db=db
+        # Check health using correct static method signature
+        health_status = await HealthMonitor.check_health(
+            db=db,
+            instance_id=database_id
         )
         
         return health_status
